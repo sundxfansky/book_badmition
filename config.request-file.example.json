@@ -1,0 +1,25 @@
+{
+  "provider": "request_file",
+  "poll_interval_seconds": 3,
+  "max_attempts": 1,
+  "target": {
+    "dates": ["2026-05-26"],
+    "time_ranges": ["07:00-08:00", "08:00-09:00"],
+    "court_names": ["4号场"]
+  },
+  "booking": {
+    "user_name": "Your Name",
+    "phone": "13800000000",
+    "participants": 1
+  },
+  "notification": {
+    "webhook_url": ""
+  },
+  "request_file": {
+    "path": "request.txt",
+    "submit_path": "/v2/reserve/submit?",
+    "dry_run": true,
+    "timeout_seconds": 10,
+    "verify_ssl": false
+  }
+}

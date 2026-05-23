@@ -1,0 +1,25 @@
+{
+  "provider": "demo",
+  "poll_interval_seconds": 3,
+  "max_attempts": 5,
+  "target": {
+    "dates": ["2026-05-24"],
+    "time_ranges": ["19:00-20:00", "20:00-21:00"],
+    "court_names": ["Court 1", "Court 2"]
+  },
+  "booking": {
+    "user_name": "Your Name",
+    "phone": "13800000000",
+    "participants": 4
+  },
+  "notification": {
+    "webhook_url": ""
+  },
+  "request_file": {
+    "path": "request.txt",
+    "submit_path": "/v2/reserve/submit?",
+    "dry_run": true,
+    "timeout_seconds": 10,
+    "verify_ssl": false
+  }
+}
