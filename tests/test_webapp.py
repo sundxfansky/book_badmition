@@ -117,6 +117,56 @@ class BookingWebAppTest(unittest.TestCase):
         self.assertIn("2026/05/28 4号场 07:00-08:00", message)
         self.assertIn("2026/05/28 4号场 08:00-09:00", message)
 
+    def test_success_round_sends_sync_notification_once(self) -> None:
+        app = BookingWebApp("request.txt")
+        state = app.state_for("client-a")
+        sent = []
+
+        def fake_send(message):
+            sent.append(message)
+            return "企业微信通知已发送"
+
+        params = {
+            "dry_run": False,
+            "headers": {},
+            "dates": ["2026/05/28"],
+            "selections": [
+                {
+                    "court": {"site_id": 3692729935134809, "site_name": "4号场"},
+                    "time_slot": {
+                        "start_time": "07:00",
+                        "end_time": "08:00",
+                        "start_timestamp": 1779922800,
+                        "end_timestamp": 1779926400,
+                        "price": "75",
+                        "times": "1",
+                    },
+                },
+                {
+                    "court": {"site_id": 3692729935134809, "site_name": "4号场"},
+                    "time_slot": {
+                        "start_time": "08:00",
+                        "end_time": "09:00",
+                        "start_timestamp": 1779926400,
+                        "end_timestamp": 1779930000,
+                        "price": "75",
+                        "times": "1",
+                    },
+                },
+            ],
+        }
+
+        with patch.object(webapp, "_send_wechat_notification", fake_send):
+            with patch.object(app, "_send_request", side_effect=lambda *args: {"success": True, "payload": {"code": 0}}):
+                response = app._send_round(state, params)
+
+        self.assertTrue(response["success"])
+        self.assertTrue(response["notification_sent"])
+        self.assertEqual(len(sent), 1)
+        self.assertIn("【羽毛球抢票】抢票成功", sent[0])
+        self.assertIn("2026/05/28 4号场 07:00-08:00", sent[0])
+        self.assertTrue(any("企业微信通知已发送" in line for line in app.status("client-a")["logs"]))
+
 
 if __name__ == "__main__":
     unittest.main()

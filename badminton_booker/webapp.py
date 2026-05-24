@@ -236,13 +236,9 @@ class BookingWebApp:
                 with state.lock:
                     state.last_response = response
                 if response.get("success"):
-                    message = (
-                        _dry_run_notification_message(response)
-                        if params.get("dry_run", True)
-                        else _success_notification_message(response)
-                    )
-                    self.log(state, message)
-                    self.notify(state, message)
+                    if not response.get("notification_sent"):
+                        self._notify_success(state, params, response)
+                    self.log(state, "任务结束")
                     break
                 max_attempts = int(params.get("max_attempts") or 0)
                 if max_attempts and attempt >= max_attempts:
@@ -328,13 +324,15 @@ class BookingWebApp:
                         self.log(state, f"成功时间数已达到 {success_units}，停止等待剩余 {len(pending)} 个请求，已取消 {cancelled} 个未开始请求")
                         executor.shutdown(wait=False, cancel_futures=True)
                         responses.sort(key=lambda item: item.get("index", 0))
-                        return {
+                        result = {
                             "success": True,
                             "success_units": success_units,
                             "responses": responses,
                             "cancelled": cancelled,
                             "success_targets": _successful_targets(responses),
                         }
+                        self._notify_success(state, params, result)
+                        return result
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
 
@@ -347,8 +345,18 @@ class BookingWebApp:
             "success_targets": _successful_targets(responses),
         }
 
-    def notify(self, state: RuntimeState, message: str) -> None:
-        notify(message, lambda result: self.log(state, result))
+    def _notify_success(self, state: RuntimeState, params: dict, response: dict) -> None:
+        message = (
+            _dry_run_notification_message(response)
+            if params.get("dry_run", True)
+            else _success_notification_message(response)
+        )
+        self.log(state, message)
+        self.notify(state, message, sync=not params.get("dry_run", True))
+        response["notification_sent"] = True
+
+    def notify(self, state: RuntimeState, message: str, sync: bool = False) -> None:
+        notify(message, lambda result: self.log(state, result), async_send=not sync)
 
     def _send_request(self, state: RuntimeState, request_data: dict, params: dict) -> dict:
         with state.lock:
@@ -442,42 +450,53 @@ class AdminAuth:
         return hashlib.sha256(f"{salt}:{password}".encode("utf-8")).hexdigest()
 
 
-def notify(message: str, callback=None) -> None:
+def notify(message: str, callback=None, async_send: bool = True) -> None:
     def worker() -> None:
-        data = json.dumps(
-            {"msgtype": "text", "text": {"content": message}},
-            ensure_ascii=False,
-        ).encode("utf-8")
-        request = Request(
-            WECHAT_BOT_WEBHOOK,
-            data=data,
-            headers={"content-type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urlopen(request, timeout=5) as response:
-                raw = response.read().decode("utf-8")
-        except HTTPError as exc:
-            _notify_result(callback, f"企业微信通知失败：HTTP {exc.code} {exc.reason}")
-            return
-        except URLError as exc:
-            _notify_result(callback, f"企业微信通知失败：{exc.reason}")
-            return
-        except TimeoutError:
-            _notify_result(callback, "企业微信通知失败：请求超时")
-            return
+        last_result = ""
+        for attempt in range(1, 4):
+            last_result = _send_wechat_notification(message)
+            if last_result == "企业微信通知已发送":
+                _notify_result(callback, last_result)
+                return
+            _notify_result(callback, f"{last_result}，第 {attempt} 次")
+            if attempt < 3:
+                time.sleep(0.5)
+        _notify_result(callback, "企业微信通知最终失败，请检查机器人 webhook 或企业微信群")
 
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError:
-            _notify_result(callback, f"企业微信通知响应异常：{raw[:200]}")
-            return
-        if payload.get("errcode") == 0:
-            _notify_result(callback, "企业微信通知已发送")
-        else:
-            _notify_result(callback, f"企业微信通知失败：{payload.get('errmsg', raw)}")
+    if async_send:
+        threading.Thread(target=worker, daemon=True).start()
+    else:
+        worker()
 
-    threading.Thread(target=worker, daemon=True).start()
+
+def _send_wechat_notification(message: str) -> str:
+    data = json.dumps(
+        {"msgtype": "text", "text": {"content": message}},
+        ensure_ascii=False,
+    ).encode("utf-8")
+    request = Request(
+        WECHAT_BOT_WEBHOOK,
+        data=data,
+        headers={"content-type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=5) as response:
+            raw = response.read().decode("utf-8")
+    except HTTPError as exc:
+        return f"企业微信通知失败：HTTP {exc.code} {exc.reason}"
+    except URLError as exc:
+        return f"企业微信通知失败：{exc.reason}"
+    except TimeoutError:
+        return "企业微信通知失败：请求超时"
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return f"企业微信通知响应异常：{raw[:200]}"
+    if payload.get("errcode") == 0:
+        return "企业微信通知已发送"
+    return f"企业微信通知失败：{payload.get('errmsg', raw)}"
 
 
 def _notify_result(callback, message: str) -> None:
