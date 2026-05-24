@@ -165,7 +165,49 @@ class BookingWebAppTest(unittest.TestCase):
         self.assertGreaterEqual(len(sent), 2)
         self.assertIn("【羽毛球抢票】单个请求抢票成功", sent[0])
         self.assertIn("2026/05/28 4号场 07:00-08:00", sent[0])
+        self.assertTrue(any("【羽毛球抢票】已停止当前 wx-token" in item for item in sent))
         self.assertTrue(any("企业微信通知已发送" in line for line in app.status("client-a")["logs"]))
+
+    def test_success_units_count_unique_date_court_time(self) -> None:
+        successful_slot_keys = set()
+        first = {
+            "success": True,
+            "request": {
+                "body": {
+                    "venues_date": "2026/05/28",
+                    "venues_site_time": [
+                        {"site_id": 1, "start_time": "08:00", "end_time": "09:00"},
+                        {"site_id": 2, "start_time": "08:00", "end_time": "09:00"},
+                    ],
+                }
+            },
+        }
+        duplicate = {
+            "success": True,
+            "request": {
+                "body": {
+                    "venues_date": "2026/05/28",
+                    "venues_site_time": [
+                        {"site_id": 1, "start_time": "08:00", "end_time": "09:00"},
+                    ],
+                }
+            },
+        }
+        next_time = {
+            "success": True,
+            "request": {
+                "body": {
+                    "venues_date": "2026/05/28",
+                    "venues_site_time": [
+                        {"site_id": 1, "start_time": "09:00", "end_time": "10:00"},
+                    ],
+                }
+            },
+        }
+
+        self.assertEqual(webapp._response_success_units(first, successful_slot_keys), 2)
+        self.assertEqual(webapp._response_success_units(duplicate, successful_slot_keys), 0)
+        self.assertEqual(webapp._response_success_units(next_time, successful_slot_keys), 1)
 
 
 if __name__ == "__main__":

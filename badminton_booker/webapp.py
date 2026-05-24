@@ -296,6 +296,7 @@ class BookingWebApp:
 
         responses = []
         success_units = 0
+        successful_slot_keys: set[str] = set()
         notified_targets: set[str] = set()
         max_workers = min(len(requests), 16)
         executor = ThreadPoolExecutor(max_workers=max_workers)
@@ -318,7 +319,7 @@ class BookingWebApp:
                     self.log(state, f"完成第 {index} 个请求（{status}）：{response['target']}")
                     if response.get("success"):
                         self._notify_request_success(state, params, response, notified_targets)
-                    success_units += _response_success_units(response)
+                    success_units += _response_success_units(response, successful_slot_keys)
 
                     if success_units >= 2:
                         cancelled = 0
@@ -326,6 +327,7 @@ class BookingWebApp:
                             if pending_future.cancel():
                                 cancelled += 1
                         self.log(state, f"成功时间数已达到 {success_units}，停止等待剩余 {len(pending)} 个请求，已取消 {cancelled} 个未开始请求")
+                        self.log(state, "已达到 2 个成功场地小时，停止当前 wx-token 的执行")
                         executor.shutdown(wait=False, cancel_futures=True)
                         responses.sort(key=lambda item: item.get("index", 0))
                         result = {
@@ -334,8 +336,10 @@ class BookingWebApp:
                             "responses": responses,
                             "cancelled": cancelled,
                             "success_targets": _successful_targets(responses),
+                            "stop_reason": "已达到 2 个成功场地小时，停止当前 wx-token 的执行",
                         }
                         self._notify_success(state, params, result)
+                        self.notify(state, _stop_notification_message(result), sync=not params.get("dry_run", True))
                         return result
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
@@ -566,9 +570,21 @@ def _dry_run_notification_message(response: dict) -> str:
 
 
 def _success_notification_message(response: dict) -> str:
+    lines = [
+        "【羽毛球抢票】抢票成功",
+        f"成功时间数：{response.get('success_units', 0)}",
+        f"抢票信息：{_response_targets_desc(response)}",
+    ]
+    if response.get("stop_reason"):
+        lines.append(str(response["stop_reason"]))
+    return "\n".join(lines)
+
+
+def _stop_notification_message(response: dict) -> str:
     return "\n".join(
         [
-            "【羽毛球抢票】抢票成功",
+            "【羽毛球抢票】已停止当前 wx-token",
+            str(response.get("stop_reason") or "已达到停止条件"),
             f"成功时间数：{response.get('success_units', 0)}",
             f"抢票信息：{_response_targets_desc(response)}",
         ]
@@ -665,16 +681,24 @@ def _request_slot_keys(request_data: dict) -> list[str]:
     return keys
 
 
-def _response_success_units(response: dict) -> int:
+def _response_success_units(response: dict, successful_slot_keys: set[str] | None = None) -> int:
     if not response.get("success"):
         return 0
-    body = response.get("request", {}).get("body")
-    if body is None and response.get("dry_run"):
-        body = response.get("body", {}).get("body")
-    slots = body.get("venues_site_time", []) if isinstance(body, dict) else []
-    if slots:
-        return len(slots)
-    return 1
+    keys = _request_slot_keys(response.get("request", {}))
+    if not keys and response.get("dry_run"):
+        keys = _request_slot_keys(response.get("body", {}))
+    if not keys:
+        keys = [str(response.get("target") or response.get("index") or "unknown")]
+    if successful_slot_keys is None:
+        return len(set(keys))
+
+    added = 0
+    for key in keys:
+        if key in successful_slot_keys:
+            continue
+        successful_slot_keys.add(key)
+        added += 1
+    return added
 
 
 def _unique_dates(values: list[str]) -> list[str]:
