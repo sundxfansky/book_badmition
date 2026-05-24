@@ -37,18 +37,36 @@ python3 -m badminton_booker web --request-file request.txt
 http://127.0.0.1:8765
 ```
 
-## Docker 启动
+## Docker 部署
 
-构建镜像：
+### 使用 GitHub 镜像
 
-```bash
-docker build -t badminton-booker .
+项目推送到 `main` 后会通过 GitHub Actions 自动构建镜像并推送到 GHCR：
+
+```text
+ghcr.io/sundxfansky/book_badmition:latest
 ```
 
-启动网页控制台：
+拉取镜像：
 
 ```bash
-docker run --rm -p 8765:8765 badminton-booker
+docker pull ghcr.io/sundxfansky/book_badmition:latest
+```
+
+前台启动：
+
+```bash
+docker run --rm -p 8765:8765 ghcr.io/sundxfansky/book_badmition:latest
+```
+
+后台启动：
+
+```bash
+docker run -d \
+  --name badminton-booker \
+  --restart unless-stopped \
+  -p 8765:8765 \
+  ghcr.io/sundxfansky/book_badmition:latest
 ```
 
 然后打开：
@@ -57,12 +75,57 @@ docker run --rm -p 8765:8765 badminton-booker
 http://127.0.0.1:8765
 ```
 
-如果要使用本机新的抓包文件覆盖镜像里的 `request.txt`：
+查看日志：
 
 ```bash
-docker run --rm -p 8765:8765 \
+docker logs -f badminton-booker
+```
+
+停止并删除容器：
+
+```bash
+docker stop badminton-booker
+docker rm badminton-booker
+```
+
+更新镜像并重启：
+
+```bash
+docker pull ghcr.io/sundxfansky/book_badmition:latest
+docker stop badminton-booker
+docker rm badminton-booker
+docker run -d \
+  --name badminton-booker \
+  --restart unless-stopped \
+  -p 8765:8765 \
+  ghcr.io/sundxfansky/book_badmition:latest
+```
+
+### 使用本机 request.txt
+
+镜像内已经包含仓库里的脱敏 `request.txt`。如果要使用本机新的抓包文件覆盖镜像里的 `request.txt`：
+
+```bash
+docker run -d \
+  --name badminton-booker \
+  --restart unless-stopped \
+  -p 8765:8765 \
   -v "$PWD/request.txt:/app/request.txt:ro" \
-  badminton-booker
+  ghcr.io/sundxfansky/book_badmition:latest
+```
+
+### 本地构建镜像
+
+如果需要从源码本地构建：
+
+```bash
+docker build -t badminton-booker .
+```
+
+启动本地构建的镜像：
+
+```bash
+docker run --rm -p 8765:8765 badminton-booker
 ```
 
 使用抓包请求演练：
