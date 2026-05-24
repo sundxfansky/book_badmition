@@ -10,13 +10,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import Request
+from urllib.request import Request, urlopen
 
 from .capture import CaptureStore, request_summary, snapshot_to_dict
 from .http_client import send_request
 
 
 WEB_DIR = Path(__file__).with_name("web")
+NOTIFY_URL = "https://tgproxy.sdxx.de/bot5567003758:AAF0hdq6fGLfN0tOFsSLsd9i-qN_4dnXoBc/sendMessage"
+NOTIFY_CHAT_ID = "932218886"
 
 
 @dataclass
@@ -36,7 +38,15 @@ class RuntimeState:
 class BookingWebApp:
     def __init__(self, request_file: str = "request.txt") -> None:
         self.capture = CaptureStore(request_file)
-        self.state = RuntimeState(params=self.default_params())
+        self.states: dict[str, RuntimeState] = {}
+        self.states_lock = threading.Lock()
+
+    def state_for(self, client_id: str) -> RuntimeState:
+        key = client_id.strip() or "default"
+        with self.states_lock:
+            if key not in self.states:
+                self.states[key] = RuntimeState(params=self.default_params())
+            return self.states[key]
 
     def default_params(self) -> dict:
         snapshot = self.capture.venue_snapshot()
@@ -58,119 +68,133 @@ class BookingWebApp:
             ],
             "time_slots": [time.__dict__ for time in snapshot.selected_times],
             "headers": {
-                "wx-token": self.capture.submit_headers().get("wx-token", ""),
                 "shop-id": self.capture.submit_headers().get("shop-id", ""),
                 "brand-code": self.capture.submit_headers().get("brand-code", ""),
             },
         }
 
-    def metadata(self) -> dict:
+    def metadata(self, client_id: str) -> dict:
+        state = self.state_for(client_id)
         snapshot = self.capture.venue_snapshot()
         return {
             "snapshot": snapshot_to_dict(snapshot),
-            "params": self.state.params,
+            "params": _without_wx_token(state.params),
         }
 
-    def status(self) -> dict:
-        with self.state.lock:
+    def status(self, client_id: str) -> dict:
+        state = self.state_for(client_id)
+        with state.lock:
             return {
-                "running": self.state.running,
-                "params": self.state.params,
-                "logs": self.state.logs[-300:],
-                "last_request": self.state.last_request,
-                "last_response": self.state.last_response,
-                "waiting_for_schedule": self.state.waiting_for_schedule,
-                "scheduled_start_at": self.state.scheduled_start_at,
+                "running": state.running,
+                "params": _without_wx_token(state.params),
+                "logs": state.logs[-300:],
+                "last_request": state.last_request,
+                "last_response": state.last_response,
+                "waiting_for_schedule": state.waiting_for_schedule,
+                "scheduled_start_at": state.scheduled_start_at,
             }
 
-    def preview(self, params: dict | None = None) -> dict:
-        effective = self._merged_params(params or {})
+    def preview(self, client_id: str, params: dict | None = None) -> dict:
+        state = self.state_for(client_id)
+        effective = self._merged_params(state, params or {})
         requests = self.capture.build_submit_requests(effective)
         return {
             "count": len(requests),
-            "requests": [request_summary(request_data) for request_data in requests],
+            "requests": [_safe_request_summary(request_data) for request_data in requests],
         }
 
-    def save_params(self, params: dict) -> dict:
-        with self.state.lock:
-            self.state.params = self._merged_params(params)
-            self.state.last_request = self.preview(self.state.params)
-        self.log("已更新抢票参数")
-        return self.status()
+    def save_params(self, client_id: str, params: dict) -> dict:
+        state = self.state_for(client_id)
+        saved_params = _without_wx_token(self._merged_params(state, params))
+        preview = self.preview(client_id, params)
+        with state.lock:
+            state.params = saved_params
+            state.last_request = preview
+        self.log(state, "已更新抢票参数")
+        return self.status(client_id)
 
-    def start(self, params: dict) -> dict:
-        self.save_params(params)
-        scheduled_ts = _scheduled_timestamp(self.state.params)
-        if self.state.params.get("schedule_enabled") and scheduled_ts is None:
-            self.log("定时启动时间格式不正确，请填写类似 2026-05-24 09:59:59 的时间")
-            return self.status()
-        with self.state.lock:
-            if self.state.running:
+    def start(self, client_id: str, params: dict) -> dict:
+        state = self.state_for(client_id)
+        run_params = self._merged_params(state, params)
+        saved_params = _without_wx_token(run_params)
+        scheduled_ts = _scheduled_timestamp(run_params)
+        if run_params.get("schedule_enabled") and scheduled_ts is None:
+            self.log(state, "定时启动时间格式不正确，请填写类似 2026-05-24 09:59:59 的时间")
+            return self.status(client_id)
+
+        preview = self.preview(client_id, run_params)
+        with state.lock:
+            state.params = saved_params
+            state.last_request = preview
+            if state.running:
                 already_running = True
             else:
                 already_running = False
-                self.state.running = True
-                self.state.waiting_for_schedule = False
-                self.state.scheduled_start_at = str(self.state.params.get("scheduled_start_at") or "")
-                self.state.stop_event.clear()
-                self.state.worker = threading.Thread(target=self._run_loop, daemon=True)
-                self.state.worker.start()
+                state.running = True
+                state.waiting_for_schedule = False
+                state.scheduled_start_at = str(run_params.get("scheduled_start_at") or "")
+                state.stop_event.clear()
+                state.worker = threading.Thread(target=self._run_loop, args=(state, run_params), daemon=True)
+                state.worker.start()
         if already_running:
-            return self.status()
+            return self.status(client_id)
 
         if scheduled_ts and scheduled_ts > time.time():
-            self.log(f"已设置定时启动：{self.state.scheduled_start_at}，等待 {_format_seconds(scheduled_ts - time.time())} 后开始")
+            self.log(state, f"已设置定时启动：{state.scheduled_start_at}，等待 {_format_seconds(scheduled_ts - time.time())} 后开始")
+            notify(f"已设置定时任务：{state.scheduled_start_at}")
         elif scheduled_ts:
-            self.log("定时启动时间已过，将立即执行抢票任务")
+            self.log(state, "定时启动时间已过，将立即执行抢票任务")
         else:
-            self.log("开始执行抢票任务")
-        return self.status()
+            self.log(state, "开始执行抢票任务")
+        return self.status(client_id)
 
-    def stop(self) -> dict:
-        with self.state.lock:
-            self.state.stop_event.set()
-            self.state.running = False
-        self.log("已请求停止")
-        return self.status()
+    def stop(self, client_id: str) -> dict:
+        state = self.state_for(client_id)
+        with state.lock:
+            state.stop_event.set()
+            state.running = False
+        self.log(state, "已请求停止")
+        return self.status(client_id)
 
-    def clear_logs(self) -> dict:
-        with self.state.lock:
-            self.state.logs.clear()
-        return self.status()
+    def clear_logs(self, client_id: str) -> dict:
+        state = self.state_for(client_id)
+        with state.lock:
+            state.logs.clear()
+        return self.status(client_id)
 
-    def log(self, message: str) -> None:
+    def log(self, state: RuntimeState, message: str) -> None:
         line = time.strftime("[%H:%M:%S] ") + message
-        with self.state.lock:
-            self.state.logs.append(line)
+        with state.lock:
+            state.logs.append(line)
 
-    def _run_loop(self) -> None:
+    def _run_loop(self, state: RuntimeState, params: dict) -> None:
         attempt = 0
         try:
-            if not self._wait_for_schedule():
+            if not self._wait_for_schedule(state, params):
                 return
-            while not self.state.stop_event.is_set():
+            while not state.stop_event.is_set():
                 attempt += 1
-                params = self.state.params
-                self.log(f"第 {attempt} 轮提交预约请求")
-                response = self._send_round(params)
-                with self.state.lock:
-                    self.state.last_response = response
+                self.log(state, f"第 {attempt} 轮提交预约请求")
+                response = self._send_round(state, params)
+                with state.lock:
+                    state.last_response = response
                 if response.get("success"):
-                    self.log("dry-run 并发演练完成，任务结束" if params.get("dry_run", True) else "本轮存在成功请求，任务结束")
+                    message = "dry-run 并发演练完成，任务结束" if params.get("dry_run", True) else "抢票成功，任务结束"
+                    self.log(state, message)
+                    notify(message)
                     break
                 max_attempts = int(params.get("max_attempts") or 0)
                 if max_attempts and attempt >= max_attempts:
-                    self.log("达到最大尝试次数，任务结束")
+                    self.log(state, "达到最大尝试次数，任务结束")
                     break
                 time.sleep(max(0.1, float(params.get("interval_seconds") or 0.1)))
         finally:
-            with self.state.lock:
-                self.state.running = False
-                self.state.waiting_for_schedule = False
-                self.state.scheduled_start_at = ""
+            with state.lock:
+                state.running = False
+                state.waiting_for_schedule = False
+                state.scheduled_start_at = ""
 
-    def _wait_for_schedule(self) -> bool:
-        params = self.state.params
+    def _wait_for_schedule(self, state: RuntimeState, params: dict) -> bool:
         scheduled_ts = _scheduled_timestamp(params)
         if not scheduled_ts:
             return True
@@ -179,45 +203,45 @@ class BookingWebApp:
         if delay <= 0:
             return True
 
-        with self.state.lock:
-            self.state.waiting_for_schedule = True
-            self.state.scheduled_start_at = str(params.get("scheduled_start_at") or "")
+        with state.lock:
+            state.waiting_for_schedule = True
+            state.scheduled_start_at = str(params.get("scheduled_start_at") or "")
 
         last_logged_seconds: int | None = None
-        while delay > 0 and not self.state.stop_event.is_set():
+        while delay > 0 and not state.stop_event.is_set():
             remaining_seconds = max(0, int(delay + 0.999))
             if remaining_seconds != last_logged_seconds:
-                self.log(f"定时启动倒计时：距离开始还有 {_format_seconds(remaining_seconds)}")
+                self.log(state, f"定时启动倒计时：距离开始还有 {_format_seconds(remaining_seconds)}")
                 last_logged_seconds = remaining_seconds
-            self.state.stop_event.wait(min(1.0, delay))
+            state.stop_event.wait(min(1.0, delay))
             delay = scheduled_ts - time.time()
 
-        with self.state.lock:
-            self.state.waiting_for_schedule = False
+        with state.lock:
+            state.waiting_for_schedule = False
 
-        if self.state.stop_event.is_set():
-            self.log("定时启动已取消")
+        if state.stop_event.is_set():
+            self.log(state, "定时启动已取消")
             return False
 
-        self.log("定时启动时间已到，开始执行抢票任务")
+        self.log(state, "定时启动时间已到，开始执行抢票任务")
         return True
 
-    def _send_round(self, params: dict) -> dict:
+    def _send_round(self, state: RuntimeState, params: dict) -> dict:
         requests = self.capture.build_submit_requests(params)
         if not requests:
-            self.log("没有可提交的请求，请至少选择日期、场地和时间段")
+            self.log(state, "没有可提交的请求，请至少选择日期、场地和时间段")
             return {"success": False, "responses": []}
 
-        self.log(f"本轮并发提交 {len(requests)} 个请求")
+        self.log(state, f"本轮并发提交 {len(requests)} 个请求")
         for index, request_data in enumerate(requests, start=1):
-            self.log(f"准备第 {index} 个请求：{_request_target_desc(request_data)}")
+            self.log(state, f"准备第 {index} 个请求：{_request_target_desc(request_data)}")
 
         responses = []
         success_units = 0
         max_workers = min(len(requests), 16)
         executor = ThreadPoolExecutor(max_workers=max_workers)
         futures = {
-            executor.submit(self._send_request, request_data, params): (index, request_data)
+            executor.submit(self._send_request, state, request_data, params): (index, request_data)
             for index, request_data in enumerate(requests, start=1)
         }
         pending = set(futures)
@@ -229,10 +253,10 @@ class BookingWebApp:
                     response = future.result()
                     response["index"] = index
                     response["target"] = _request_target_desc(request_data)
-                    response["request"] = request_summary(request_data)
+                    response["request"] = _safe_request_summary(request_data)
                     responses.append(response)
                     status = "成功" if response.get("success") else "失败"
-                    self.log(f"完成第 {index} 个请求（{status}）：{response['target']}")
+                    self.log(state, f"完成第 {index} 个请求（{status}）：{response['target']}")
                     success_units += _response_success_units(response)
 
                     if success_units >= 2:
@@ -240,7 +264,7 @@ class BookingWebApp:
                         for pending_future in pending:
                             if pending_future.cancel():
                                 cancelled += 1
-                        self.log(f"成功时间数已达到 {success_units}，停止等待剩余 {len(pending)} 个请求，已取消 {cancelled} 个未开始请求")
+                        self.log(state, f"成功时间数已达到 {success_units}，停止等待剩余 {len(pending)} 个请求，已取消 {cancelled} 个未开始请求")
                         executor.shutdown(wait=False, cancel_futures=True)
                         responses.sort(key=lambda item: item.get("index", 0))
                         return {"success": True, "success_units": success_units, "responses": responses, "cancelled": cancelled}
@@ -248,15 +272,15 @@ class BookingWebApp:
             executor.shutdown(wait=False, cancel_futures=True)
 
         responses.sort(key=lambda item: item.get("index", 0))
-        self.log(f"本轮成功时间数：{success_units}")
+        self.log(state, f"本轮成功时间数：{success_units}")
         return {"success": success_units >= 2, "success_units": success_units, "responses": responses}
 
-    def _send_request(self, request_data: dict, params: dict) -> dict:
-        with self.state.lock:
-            self.state.last_request = request_summary(request_data)
+    def _send_request(self, state: RuntimeState, request_data: dict, params: dict) -> dict:
+        with state.lock:
+            state.last_request = _safe_request_summary(request_data)
 
         if params.get("dry_run", True):
-            return {"success": True, "dry_run": True, "body": request_summary(request_data)}
+            return {"success": True, "dry_run": True, "body": _safe_request_summary(request_data)}
 
         data = json.dumps(request_data["body"], ensure_ascii=False).encode("utf-8")
         request = Request(
@@ -268,12 +292,12 @@ class BookingWebApp:
         try:
             raw, ssl_fallback = send_request(request, timeout=10, verify_ssl=params.get("verify_ssl", True))
             if ssl_fallback:
-                self.log("本机证书校验失败，已自动关闭 SSL 校验重试一次")
+                self.log(state, "本机证书校验失败，已自动关闭 SSL 校验重试一次")
         except HTTPError as exc:
-            self.log(f"HTTP 错误：{exc.code} {exc.reason}")
+            self.log(state, f"HTTP 错误：{exc.code} {exc.reason}")
             return {"success": False, "error": f"HTTP {exc.code}: {exc.reason}"}
         except URLError as exc:
-            self.log(f"网络错误：{exc.reason}")
+            self.log(state, f"网络错误：{exc.reason}")
             return {"success": False, "error": str(exc.reason)}
 
         try:
@@ -283,8 +307,8 @@ class BookingWebApp:
         success = payload.get("code") == 0
         return {"success": success, "message": payload.get("msg", payload.get("code")), "payload": payload}
 
-    def _merged_params(self, params: dict) -> dict:
-        merged = json.loads(json.dumps(self.state.params or self.default_params(), ensure_ascii=False))
+    def _merged_params(self, state: RuntimeState, params: dict) -> dict:
+        merged = json.loads(json.dumps(state.params or self.default_params(), ensure_ascii=False))
         for key, value in params.items():
             if key == "headers":
                 merged.setdefault("headers", {}).update(value or {})
@@ -295,6 +319,36 @@ class BookingWebApp:
             else:
                 merged[key] = value
         return merged
+
+
+def notify(message: str) -> None:
+    def worker() -> None:
+        from urllib.parse import urlencode
+
+        query = urlencode({"chat_id": NOTIFY_CHAT_ID, "text": message})
+        try:
+            with urlopen(f"{NOTIFY_URL}?{query}", timeout=5):
+                pass
+        except (HTTPError, URLError, TimeoutError):
+            return
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
+def _without_wx_token(params: dict) -> dict:
+    clean = json.loads(json.dumps(params or {}, ensure_ascii=False))
+    headers = clean.get("headers")
+    if isinstance(headers, dict):
+        headers.pop("wx-token", None)
+    return clean
+
+
+def _safe_request_summary(request_data: dict) -> dict:
+    summary = request_summary(request_data)
+    headers = summary.get("headers")
+    if isinstance(headers, dict):
+        headers.pop("wx-token", None)
+    return summary
 
 
 def _request_target_desc(request_data: dict) -> str:
@@ -397,6 +451,7 @@ def create_handler(app: BookingWebApp) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             path = urlparse(self.path).path
+            client_id = self._client_id()
             if path == "/":
                 self._send_file(WEB_DIR / "index.html", "text/html; charset=utf-8")
             elif path == "/app.js":
@@ -404,29 +459,30 @@ def create_handler(app: BookingWebApp) -> type[BaseHTTPRequestHandler]:
             elif path == "/styles.css":
                 self._send_file(WEB_DIR / "styles.css", "text/css; charset=utf-8")
             elif path == "/api/metadata":
-                self._json(app.metadata())
+                self._json(app.metadata(client_id))
             elif path == "/api/status":
-                self._json(app.status())
+                self._json(app.status(client_id))
             elif path == "/api/export":
-                self._json(app.state.params)
+                self._json(app.status(client_id)["params"])
             else:
                 self.send_error(404)
 
         def do_POST(self) -> None:
             path = urlparse(self.path).path
+            client_id = self._client_id()
             payload = self._read_json()
             if path == "/api/preview":
-                self._json(app.preview(payload))
+                self._json(app.preview(client_id, payload))
             elif path == "/api/save":
-                self._json(app.save_params(payload))
+                self._json(app.save_params(client_id, payload))
             elif path == "/api/import":
-                self._json(app.save_params(payload))
+                self._json(app.save_params(client_id, payload))
             elif path == "/api/start":
-                self._json(app.start(payload))
+                self._json(app.start(client_id, payload))
             elif path == "/api/stop":
-                self._json(app.stop())
+                self._json(app.stop(client_id))
             elif path == "/api/clear-logs":
-                self._json(app.clear_logs())
+                self._json(app.clear_logs(client_id))
             else:
                 self.send_error(404)
 
@@ -438,6 +494,9 @@ def create_handler(app: BookingWebApp) -> type[BaseHTTPRequestHandler]:
             if not length:
                 return {}
             return json.loads(self.rfile.read(length).decode("utf-8"))
+
+        def _client_id(self) -> str:
+            return str(self.headers.get("x-client-id") or "default")
 
         def _json(self, payload: dict) -> None:
             data = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")

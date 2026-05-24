@@ -8,13 +8,19 @@ const state = {
 };
 
 const WX_TOKEN_CACHE_KEY = "badminton_booker.wx_token";
+const CLIENT_ID_CACHE_KEY = "badminton_booker.client_id";
 
 const $ = (id) => document.getElementById(id);
+const clientId = getClientId();
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
-    headers: { "content-type": "application/json" },
     ...options,
+    headers: {
+      "content-type": "application/json",
+      "x-client-id": clientId,
+      ...(options.headers || {}),
+    },
   });
   if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
   return response.json();
@@ -286,7 +292,9 @@ async function clearLogs() {
 }
 
 async function exportParams() {
-  $("jsonBox").value = JSON.stringify(currentParams(), null, 2);
+  const params = currentParams();
+  delete params.headers["wx-token"];
+  $("jsonBox").value = JSON.stringify(params, null, 2);
 }
 
 async function importParams() {
@@ -511,3 +519,15 @@ boot().catch((error) => {
 updateLogFontSize();
 setupLogResize();
 renderRequestPanel();
+
+function getClientId() {
+  try {
+    const cached = window.localStorage?.getItem(CLIENT_ID_CACHE_KEY);
+    if (cached) return cached;
+    const id = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+    window.localStorage?.setItem(CLIENT_ID_CACHE_KEY, id);
+    return id;
+  } catch {
+    return "default";
+  }
+}
