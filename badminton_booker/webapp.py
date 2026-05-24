@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from html import escape
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 
 from .capture import CaptureStore, request_summary, snapshot_to_dict
@@ -23,10 +23,7 @@ WEB_DIR = Path(__file__).with_name("web")
 ADMIN_PATH = "/sundx"
 ADMIN_CONFIG_PATH = Path(".sundx_admin.json")
 ADMIN_COOKIE_NAME = "sundx_admin_session"
-NOTIFY_TEMPLATE = (
-    "https://tgproxy.sdxx.de/bot5567003758:AAF0hdq6fGLfN0tOFsSLsd9i-qN_4dnXoBc/"
-    "sendMessage?chat_id=932218886&text={text}"
-)
+WECHAT_BOT_WEBHOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=f4086525-5bfb-4c29-8cda-5f70455e2e6b"
 
 
 @dataclass
@@ -429,9 +426,18 @@ class AdminAuth:
 
 def notify(message: str) -> None:
     def worker() -> None:
-        url = NOTIFY_TEMPLATE.replace("{text}", quote(message, safe=""))
+        data = json.dumps(
+            {"msgtype": "text", "text": {"content": message}},
+            ensure_ascii=False,
+        ).encode("utf-8")
+        request = Request(
+            WECHAT_BOT_WEBHOOK,
+            data=data,
+            headers={"content-type": "application/json"},
+            method="POST",
+        )
         try:
-            with urlopen(url, timeout=5):
+            with urlopen(request, timeout=5):
                 pass
         except (HTTPError, URLError, TimeoutError):
             return

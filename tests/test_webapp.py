@@ -1,6 +1,7 @@
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 import badminton_booker.webapp as webapp
 from badminton_booker.webapp import BookingWebApp, _admin_page
@@ -59,6 +60,41 @@ class BookingWebAppTest(unittest.TestCase):
                 self.assertIn("已请求停止", app.status("client-a")["logs"][-1])
             finally:
                 webapp.ADMIN_CONFIG_PATH = original_path
+
+    def test_notify_uses_wechat_bot_webhook(self) -> None:
+        captured = {}
+
+        def fake_urlopen(request, timeout=0):
+            captured["url"] = request.full_url
+            captured["data"] = request.data.decode("utf-8")
+            captured["timeout"] = timeout
+
+            class Response:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, exc, traceback):
+                    return False
+
+            return Response()
+
+        class ImmediateThread:
+            def __init__(self, target, daemon=False):
+                self.target = target
+                self.daemon = daemon
+
+            def start(self):
+                self.target()
+
+        with patch.object(webapp, "urlopen", fake_urlopen), patch.object(webapp.threading, "Thread", ImmediateThread):
+            webapp.notify("test")
+
+        self.assertEqual(captured["url"], webapp.WECHAT_BOT_WEBHOOK)
+        self.assertEqual(captured["timeout"], 5)
+        self.assertEqual(
+            captured["data"],
+            '{"msgtype": "text", "text": {"content": "test"}}',
+        )
 
 
 if __name__ == "__main__":
