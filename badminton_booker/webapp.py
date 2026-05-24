@@ -154,7 +154,7 @@ class BookingWebApp:
 
         if scheduled_ts and scheduled_ts > time.time():
             self.log(state, f"已设置定时启动：{state.scheduled_start_at}，等待 {_format_seconds(scheduled_ts - time.time())} 后开始")
-            notify(f"已设置定时任务：{state.scheduled_start_at}")
+            self.notify(state, _schedule_notification_message(run_params))
         elif scheduled_ts:
             self.log(state, "定时启动时间已过，将立即执行抢票任务")
         else:
@@ -236,9 +236,13 @@ class BookingWebApp:
                 with state.lock:
                     state.last_response = response
                 if response.get("success"):
-                    message = "dry-run 并发演练完成，任务结束" if params.get("dry_run", True) else "抢票成功，任务结束"
+                    message = (
+                        _dry_run_notification_message(response)
+                        if params.get("dry_run", True)
+                        else _success_notification_message(response)
+                    )
                     self.log(state, message)
-                    notify(message)
+                    self.notify(state, message)
                     break
                 max_attempts = int(params.get("max_attempts") or 0)
                 if max_attempts and attempt >= max_attempts:
@@ -324,13 +328,27 @@ class BookingWebApp:
                         self.log(state, f"成功时间数已达到 {success_units}，停止等待剩余 {len(pending)} 个请求，已取消 {cancelled} 个未开始请求")
                         executor.shutdown(wait=False, cancel_futures=True)
                         responses.sort(key=lambda item: item.get("index", 0))
-                        return {"success": True, "success_units": success_units, "responses": responses, "cancelled": cancelled}
+                        return {
+                            "success": True,
+                            "success_units": success_units,
+                            "responses": responses,
+                            "cancelled": cancelled,
+                            "success_targets": _successful_targets(responses),
+                        }
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
 
         responses.sort(key=lambda item: item.get("index", 0))
         self.log(state, f"本轮成功时间数：{success_units}")
-        return {"success": success_units >= 2, "success_units": success_units, "responses": responses}
+        return {
+            "success": success_units >= 2,
+            "success_units": success_units,
+            "responses": responses,
+            "success_targets": _successful_targets(responses),
+        }
+
+    def notify(self, state: RuntimeState, message: str) -> None:
+        notify(message, lambda result: self.log(state, result))
 
     def _send_request(self, state: RuntimeState, request_data: dict, params: dict) -> dict:
         with state.lock:
@@ -424,7 +442,7 @@ class AdminAuth:
         return hashlib.sha256(f"{salt}:{password}".encode("utf-8")).hexdigest()
 
 
-def notify(message: str) -> None:
+def notify(message: str, callback=None) -> None:
     def worker() -> None:
         data = json.dumps(
             {"msgtype": "text", "text": {"content": message}},
@@ -437,12 +455,34 @@ def notify(message: str) -> None:
             method="POST",
         )
         try:
-            with urlopen(request, timeout=5):
-                pass
-        except (HTTPError, URLError, TimeoutError):
+            with urlopen(request, timeout=5) as response:
+                raw = response.read().decode("utf-8")
+        except HTTPError as exc:
+            _notify_result(callback, f"企业微信通知失败：HTTP {exc.code} {exc.reason}")
+            return
+        except URLError as exc:
+            _notify_result(callback, f"企业微信通知失败：{exc.reason}")
+            return
+        except TimeoutError:
+            _notify_result(callback, "企业微信通知失败：请求超时")
             return
 
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            _notify_result(callback, f"企业微信通知响应异常：{raw[:200]}")
+            return
+        if payload.get("errcode") == 0:
+            _notify_result(callback, "企业微信通知已发送")
+        else:
+            _notify_result(callback, f"企业微信通知失败：{payload.get('errmsg', raw)}")
+
     threading.Thread(target=worker, daemon=True).start()
+
+
+def _notify_result(callback, message: str) -> None:
+    if callback:
+        callback(message)
 
 
 def _without_wx_token(params: dict) -> dict:
@@ -459,6 +499,85 @@ def _safe_request_summary(request_data: dict) -> dict:
     if isinstance(headers, dict):
         headers.pop("wx-token", None)
     return summary
+
+
+def _schedule_notification_message(params: dict) -> str:
+    return "\n".join(
+        [
+            "【羽毛球抢票】定时任务已添加",
+            f"启动时间：{params.get('scheduled_start_at') or '-'}",
+            f"抢票信息：{_params_booking_desc(params)}",
+            f"模式：{'dry-run' if params.get('dry_run') else '真实提交'}",
+        ]
+    )
+
+
+def _dry_run_notification_message(response: dict) -> str:
+    return "\n".join(
+        [
+            "【羽毛球抢票】dry-run 并发演练完成",
+            f"成功时间数：{response.get('success_units', 0)}",
+            f"抢票信息：{_response_targets_desc(response)}",
+        ]
+    )
+
+
+def _success_notification_message(response: dict) -> str:
+    return "\n".join(
+        [
+            "【羽毛球抢票】抢票成功",
+            f"成功时间数：{response.get('success_units', 0)}",
+            f"抢票信息：{_response_targets_desc(response)}",
+        ]
+    )
+
+
+def _params_booking_desc(params: dict) -> str:
+    selections = params.get("selections") or []
+    if selections:
+        dates = params.get("dates") or ([params.get("date")] if params.get("date") else [])
+        targets = []
+        for date in dates:
+            for item in selections:
+                court = item.get("court") or {}
+                time_slot = item.get("time_slot") or {}
+                targets.append(
+                    f"{date} {court.get('site_name', '未知场地')} "
+                    f"{time_slot.get('start_time', '?')}-{time_slot.get('end_time', '?')}"
+                )
+        return "；".join(targets[:10]) + (" ..." if len(targets) > 10 else "")
+
+    dates = params.get("dates") or ([params.get("date")] if params.get("date") else [])
+    courts = params.get("courts") or []
+    times = params.get("time_slots") or []
+    targets = []
+    for date in dates:
+        for court in courts:
+            for time_slot in times:
+                targets.append(
+                    f"{date} {court.get('site_name', '未知场地')} "
+                    f"{time_slot.get('start_time', '?')}-{time_slot.get('end_time', '?')}"
+                )
+    return "；".join(targets[:10]) + (" ..." if len(targets) > 10 else "") if targets else "-"
+
+
+def _successful_targets(responses: list[dict]) -> list[str]:
+    targets = []
+    for response in responses:
+        if response.get("success") and response.get("target"):
+            targets.append(str(response["target"]))
+    return targets
+
+
+def _response_targets_desc(response: dict) -> str:
+    targets = response.get("success_targets") or []
+    if not targets:
+        targets = [
+            str(item.get("target"))
+            for item in response.get("responses", [])
+            if item.get("success") and item.get("target")
+        ]
+    return "；".join(targets) if targets else "-"
 
 
 def _request_target_desc(request_data: dict) -> str:

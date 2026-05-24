@@ -76,6 +76,9 @@ class BookingWebAppTest(unittest.TestCase):
                 def __exit__(self, exc_type, exc, traceback):
                     return False
 
+                def read(self):
+                    return b'{"errcode":0,"errmsg":"ok"}'
+
             return Response()
 
         class ImmediateThread:
@@ -87,14 +90,32 @@ class BookingWebAppTest(unittest.TestCase):
                 self.target()
 
         with patch.object(webapp, "urlopen", fake_urlopen), patch.object(webapp.threading, "Thread", ImmediateThread):
-            webapp.notify("test")
+            results = []
+            webapp.notify("【羽毛球抢票】test", results.append)
 
         self.assertEqual(captured["url"], webapp.WECHAT_BOT_WEBHOOK)
         self.assertEqual(captured["timeout"], 5)
         self.assertEqual(
             captured["data"],
-            '{"msgtype": "text", "text": {"content": "test"}}',
+            '{"msgtype": "text", "text": {"content": "【羽毛球抢票】test"}}',
         )
+        self.assertEqual(results, ["企业微信通知已发送"])
+
+    def test_success_notification_includes_booking_context(self) -> None:
+        message = webapp._success_notification_message(
+            {
+                "success_units": 2,
+                "success_targets": [
+                    "2026/05/28 4号场 07:00-08:00",
+                    "2026/05/28 4号场 08:00-09:00",
+                ],
+            }
+        )
+
+        self.assertIn("【羽毛球抢票】抢票成功", message)
+        self.assertIn("成功时间数：2", message)
+        self.assertIn("2026/05/28 4号场 07:00-08:00", message)
+        self.assertIn("2026/05/28 4号场 08:00-09:00", message)
 
 
 if __name__ == "__main__":
