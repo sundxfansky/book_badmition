@@ -7,6 +7,7 @@ from .config import load_config
 from .notifier import Notifier
 from .providers import create_provider
 from .scheduler import BookingRunner
+from .timezone import apply_timezone
 from .webapp import run_server
 
 
@@ -21,6 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    apply_timezone()
     parser = build_parser()
     args = parser.parse_args(argv)
 
