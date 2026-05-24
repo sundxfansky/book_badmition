@@ -9,3 +9,4 @@ venv/
 env/
 node_modules/
 config.json
+.sundx_admin.json
