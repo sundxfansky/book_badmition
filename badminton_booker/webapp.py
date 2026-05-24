@@ -37,6 +37,7 @@ class RuntimeState:
     waiting_for_schedule: bool = False
     scheduled_start_at: str = ""
     wx_token: str = ""
+    notified_targets: set[str] = field(default_factory=set)
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     stop_event: threading.Event = field(default_factory=threading.Event)
@@ -295,6 +296,7 @@ class BookingWebApp:
 
         responses = []
         success_units = 0
+        notified_targets: set[str] = set()
         max_workers = min(len(requests), 16)
         executor = ThreadPoolExecutor(max_workers=max_workers)
         futures = {
@@ -314,6 +316,8 @@ class BookingWebApp:
                     responses.append(response)
                     status = "成功" if response.get("success") else "失败"
                     self.log(state, f"完成第 {index} 个请求（{status}）：{response['target']}")
+                    if response.get("success"):
+                        self._notify_request_success(state, params, response, notified_targets)
                     success_units += _response_success_units(response)
 
                     if success_units >= 2:
@@ -351,6 +355,26 @@ class BookingWebApp:
             if params.get("dry_run", True)
             else _success_notification_message(response)
         )
+        self.log(state, message)
+        self.notify(state, message, sync=not params.get("dry_run", True))
+        response["notification_sent"] = True
+
+    def _notify_request_success(
+        self,
+        state: RuntimeState,
+        params: dict,
+        response: dict,
+        round_notified_targets: set[str],
+    ) -> None:
+        target = str(response.get("target") or "")
+        if not target or target in round_notified_targets:
+            return
+        with state.lock:
+            if target in state.notified_targets:
+                return
+            state.notified_targets.add(target)
+        round_notified_targets.add(target)
+        message = _single_success_notification_message(response, dry_run=bool(params.get("dry_run", True)))
         self.log(state, message)
         self.notify(state, message, sync=not params.get("dry_run", True))
         response["notification_sent"] = True
@@ -547,6 +571,17 @@ def _success_notification_message(response: dict) -> str:
             "【羽毛球抢票】抢票成功",
             f"成功时间数：{response.get('success_units', 0)}",
             f"抢票信息：{_response_targets_desc(response)}",
+        ]
+    )
+
+
+def _single_success_notification_message(response: dict, dry_run: bool) -> str:
+    title = "【羽毛球抢票】dry-run 单个请求成功" if dry_run else "【羽毛球抢票】单个请求抢票成功"
+    return "\n".join(
+        [
+            title,
+            f"抢票信息：{response.get('target') or '-'}",
+            f"请求序号：{response.get('index', '-')}",
         ]
     )
 
