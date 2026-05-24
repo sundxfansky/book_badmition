@@ -6,10 +6,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY badminton_booker ./badminton_booker
+COPY request.txt ./request.txt
 COPY config.example.json ./config.example.json
 COPY config.request-file.example.json ./config.request-file.example.json
 COPY README.md ./README.md
-RUN touch ./request.txt
 
 EXPOSE 8765
 
