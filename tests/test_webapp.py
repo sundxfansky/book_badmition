@@ -291,6 +291,86 @@ class BookingWebAppTest(unittest.TestCase):
         self.assertEqual(preview["monitor_targets"], ["2026/05/28 1号场 09:00-10:00"])
         self.assertEqual(len(preview["submit_requests_when_released"]), 1)
 
+    def test_site_status_returns_live_snapshot(self) -> None:
+        app = BookingWebApp("request.txt")
+        payload = {
+            "code": 0,
+            "data": {
+                "list": [
+                    {
+                        "site_id": 3692729935134806,
+                        "site_name": "1号场",
+                        "site_data": [
+                            {
+                                "status": 2,
+                                "times": "1",
+                                "start_time": "07:00",
+                                "end_time": "08:00",
+                                "price": "75",
+                            },
+                            {
+                                "status": 1,
+                                "times": "0",
+                                "start_time": "08:00",
+                                "end_time": "09:00",
+                                "price": "75",
+                                "disabled_desc": "已预约",
+                            },
+                        ],
+                    }
+                ]
+            },
+        }
+
+        with patch.object(app, "_send_site_list_request", return_value={"success": True, "payload": payload}):
+            response = app.site_status(
+                "client-a",
+                {
+                    "monitor_date": "2026/05/28",
+                    "headers": {"wx-token": "token-a"},
+                },
+            )
+
+        self.assertTrue(response["success"])
+        self.assertEqual(response["available_count"], 1)
+        self.assertEqual(response["occupied_count"], 1)
+        self.assertEqual(response["snapshot"]["date"], "2026/05/28")
+        self.assertTrue(response["snapshot"]["items"][0]["available"])
+        self.assertFalse(response["snapshot"]["items"][1]["available"])
+        self.assertNotIn("wx-token", response["request"]["headers"])
+        self.assertEqual(app.admin_snapshot()["tasks"][0]["wx_token"], "token-a")
+
+    def test_monitor_loop_uses_separate_interval(self) -> None:
+        app = BookingWebApp("request.txt")
+        state = app.state_for("client-a")
+        calls = []
+        params = {
+            "dry_run": True,
+            "monitor_interval_seconds": 20,
+            "max_attempts": 2,
+            "monitor_date": "2026/05/28",
+            "monitor_selections": [
+                {
+                    "court": {"site_id": 3692729935134806, "site_name": "1号场"},
+                    "time_slot": {
+                        "start_time": "09:00",
+                        "end_time": "10:00",
+                        "start_timestamp": 1779930000,
+                        "end_timestamp": 1779933600,
+                        "price": "75",
+                        "times": "1",
+                    },
+                }
+            ],
+        }
+
+        with patch.object(app, "_send_monitor_round", side_effect=lambda *args: {"success": False}):
+            with patch.object(state.stop_event, "wait", side_effect=lambda seconds: calls.append(seconds)):
+                app._run_monitor_loop(state, params)
+
+        self.assertEqual(calls, [20])
+        self.assertTrue(any("监听间隔 20 秒" in line for line in state.logs))
+
 
 if __name__ == "__main__":
     unittest.main()

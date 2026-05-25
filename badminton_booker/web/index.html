@@ -64,10 +64,6 @@
             <input id="pairModeInput" type="radio" name="requestMode" value="pair" />
             同场相邻两小时一起请求
           </label>
-          <label class="check">
-            <input id="monitorEnabledInput" type="checkbox" />
-            监听已约场地释放后下单
-          </label>
         </div>
 
         <h3>日期</h3>
@@ -93,8 +89,30 @@
           </label>
         </div>
 
+        <h3>监听场地下单</h3>
+        <div class="monitor-panel">
+          <label class="check monitor-switch">
+            <input id="monitorEnabledInput" type="checkbox" />
+            开启监听场地下单
+          </label>
+          <div class="grid two">
+            <label>
+              监听日期
+              <input id="monitorDateInput" type="text" placeholder="2026/05/28" />
+            </label>
+            <label>
+              监听间隔秒
+              <input id="monitorIntervalInput" type="number" min="1" step="1" value="20" />
+            </label>
+          </div>
+          <div class="row monitor-actions">
+            <button id="querySiteStatusBtn" type="button">查询当前场地预约情况</button>
+            <span id="siteStatusSummary" class="status-text">开启监听后，先选择日期再查询。</span>
+          </div>
+        </div>
+
         <h3>场地时间</h3>
-        <p class="field-hint">开启监听后，请选择显示为“已约”的场地时间；系统会轮询场地状态，释放后立即下单。</p>
+        <p class="field-hint">普通抢票可直接选择可预约目标；监听模式需要先查询实时状态，只能选择“已约”的场地时间。</p>
         <div id="scheduleGrid" class="schedule-grid"></div>
 
         <h3>导入 / 导出</h3>

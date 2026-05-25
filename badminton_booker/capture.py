@@ -258,12 +258,10 @@ def snapshot_to_dict(snapshot: VenueSnapshot) -> dict:
     }
 
 
-def site_list_snapshot_to_dict(entry: dict | None) -> dict:
-    if not entry:
-        return {"date": "", "items": []}
-    parsed = urlparse(str(entry.get("path", "")))
-    date = parse_qs(parsed.query).get("date", [""])[0]
-    payload = decode_json_body(entry.get("res", {}))
+def site_list_payload_to_dict(payload: dict | None, date: str = "") -> dict:
+    if not isinstance(payload, dict):
+        return {"date": unquote(str(date or "")), "items": []}
+    date = unquote(str(date or ""))
     data = payload.get("data", {}) if isinstance(payload, dict) else {}
     items = []
     for court in data.get("list", []):
@@ -289,7 +287,16 @@ def site_list_snapshot_to_dict(entry: dict | None) -> dict:
                     "mobile": str(slot.get("mobile", "")),
                 }
             )
-    return {"date": unquote(date), "items": items}
+    return {"date": date, "items": items}
+
+
+def site_list_snapshot_to_dict(entry: dict | None) -> dict:
+    if not entry:
+        return {"date": "", "items": []}
+    parsed = urlparse(str(entry.get("path", "")))
+    date = parse_qs(parsed.query).get("date", [""])[0]
+    payload = decode_json_body(entry.get("res", {}))
+    return site_list_payload_to_dict(payload, date)
 
 
 def request_summary(request_data: dict) -> dict:

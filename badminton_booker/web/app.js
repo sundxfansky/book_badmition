@@ -5,6 +5,8 @@ const state = {
   selectedCells: [],
   monitorCells: [],
   siteListSnapshot: null,
+  siteStatusQueried: false,
+  previewPinned: false,
   logs: [],
   requestCollapsed: false,
 };
@@ -42,6 +44,8 @@ function currentParams() {
     request_mode: requestMode(),
     selections: state.selectedCells,
     monitor_enabled: $("monitorEnabledInput").checked,
+    monitor_date: normalizeDate($("monitorDateInput").value) || state.selectedDates[0] || $("dateInput").value.trim(),
+    monitor_interval_seconds: Number($("monitorIntervalInput").value || 20),
     monitor_selections: state.monitorCells,
     headers: {
       "wx-token": $("wxTokenInput").value.trim(),
@@ -64,6 +68,8 @@ function applyParams(params, options = {}) {
   $("scheduleEnabledInput").checked = params.schedule_enabled === true;
   $("scheduledStartInput").value = toDatetimeLocalValue(params.scheduled_start_at || "");
   $("monitorEnabledInput").checked = params.monitor_enabled === true;
+  $("monitorDateInput").value = params.monitor_date || params.date || "";
+  $("monitorIntervalInput").value = params.monitor_interval_seconds ?? 20;
   $("wxTokenInput").value = token;
   $("shopIdInput").value = params.headers?.["shop-id"] || "";
   $("brandCodeInput").value = params.headers?.["brand-code"] || "";
@@ -128,7 +134,9 @@ function renderChoices() {
 
 function renderSubtitle() {
   if (!state.snapshot) return;
-  const mode = $("monitorEnabledInput").checked ? `监听 ${state.monitorCells.length} 个已约场地时间` : `已选 ${state.selectedCells.length} 个场地时间`;
+  const mode = $("monitorEnabledInput").checked
+    ? `监听下单 · 已选 ${state.monitorCells.length} 个已约场地时间`
+    : `普通抢票 · 已选 ${state.selectedCells.length} 个场地时间`;
   $("subtitle").textContent = `${state.selectedDates.length} 个日期 · ${mode}`;
 }
 
@@ -142,6 +150,12 @@ function renderDates() {
     chip.querySelector("button").addEventListener("click", () => {
       state.selectedDates = state.selectedDates.filter((item) => item !== date);
       $("dateInput").value = state.selectedDates[0] || "";
+      if ($("monitorDateInput").value === date) {
+        $("monitorDateInput").value = state.selectedDates[0] || "";
+        state.siteStatusQueried = false;
+        state.siteListSnapshot = null;
+        state.monitorCells = [];
+      }
       renderChoices();
       preview();
     });
@@ -154,6 +168,7 @@ function renderScheduleGrid() {
   const courts = allCourts();
   const times = allTimes();
   const monitorMode = $("monitorEnabledInput").checked;
+  updateMonitorControls();
   grid.style.gridTemplateColumns = `112px repeat(${courts.length}, minmax(86px, 1fr))`;
   grid.innerHTML = "";
 
@@ -168,11 +183,21 @@ function renderScheduleGrid() {
       const status = slotStatus(court, timeSlot);
       const selected = monitorMode ? isMonitorCell(court, timeSlot) : isSelectedCell(court, timeSlot);
       const button = document.createElement("button");
-      button.className = `schedule-cell${selected ? " active" : ""}${status.available ? " available" : " occupied"}`;
+      const disabled = monitorMode && (!state.siteStatusQueried || status.available);
+      button.className = `schedule-cell${selected ? " active" : ""}${status.available ? " available" : " occupied"}${disabled ? " disabled" : ""}`;
+      button.disabled = monitorMode && !state.siteStatusQueried;
       button.innerHTML = `<span>${timeSlot.price} 元</span><small>${status.label}</small>`;
       button.title = status.desc;
       button.addEventListener("click", () => {
         if (monitorMode) {
+          if (!state.siteStatusQueried) {
+            showNotice("请先点击查询当前场地预约情况");
+            return;
+          }
+          if (status.available) {
+            showNotice("这个场地当前可预约，请切换到普通抢票模式");
+            return;
+          }
           toggleMonitorCell(court, timeSlot);
         } else {
           toggleCell(court, timeSlot);
@@ -234,28 +259,51 @@ function sameTime(a, b) {
   return a?.start_time === b?.start_time && a?.end_time === b?.end_time;
 }
 
+function selectionKey(court, timeSlot) {
+  return `${court?.site_id || ""}|${timeSlot?.start_time || ""}|${timeSlot?.end_time || ""}`;
+}
+
 function normalizeTimes(slots) {
   return Array.from(slots || []);
 }
 
 function slotStatus(court, timeSlot) {
+  const monitorMode = $("monitorEnabledInput").checked;
+  if (!monitorMode) {
+    return { available: true, label: "可选", desc: "普通抢票模式直接构造预约请求" };
+  }
+  if (!state.siteStatusQueried) {
+    return { available: true, label: "未查询", desc: "开启监听后，请先查询当前场地预约情况" };
+  }
   const item = (state.siteListSnapshot?.items || []).find((entry) => sameCell(entry, court, timeSlot));
   if (!item) {
-    return { available: true, label: "未知", desc: "抓包快照里没有这个状态" };
+    return { available: true, label: "未知", desc: "当前没有这个场地时间的预约状态" };
   }
   if (item.available) {
-    return { available: true, label: "可约", desc: "当前抓包快照显示可预约" };
+    return { available: true, label: "可约", desc: "当前场地状态显示可预约" };
   }
   return {
     available: false,
     label: "已约",
-    desc: item.disabled_desc || item.disabled_reason || item.member_name || "当前抓包快照显示不可预约",
+    desc: item.disabled_desc || item.disabled_reason || item.member_name || "当前场地状态显示不可预约",
   };
 }
 
 function showNotice(message) {
   $("subtitle").textContent = message;
   setTimeout(renderSubtitle, 1600);
+}
+
+function updateMonitorControls() {
+  const enabled = $("monitorEnabledInput").checked;
+  $("monitorDateInput").disabled = !enabled;
+  $("monitorIntervalInput").disabled = !enabled;
+  $("querySiteStatusBtn").disabled = !enabled;
+  if (!enabled) {
+    $("siteStatusSummary").textContent = "开启监听后，先选择日期再查询。";
+  } else if (!state.siteStatusQueried) {
+    $("siteStatusSummary").textContent = "请选择日期，然后点击查询当前场地预约情况。";
+  }
 }
 
 function normalizeDates(values) {
@@ -309,6 +357,7 @@ async function preview() {
     body: JSON.stringify(currentParams()),
   });
   $("requestView").textContent = JSON.stringify(data, null, 2);
+  state.previewPinned = true;
 }
 
 async function save() {
@@ -320,6 +369,11 @@ async function save() {
 }
 
 async function start() {
+  if ($("monitorEnabledInput").checked && !state.monitorCells.length) {
+    showNotice("监听下单需要先查询并选择已约场地时间");
+    return;
+  }
+  state.previewPinned = false;
   const data = await api("/api/start", {
     method: "POST",
     body: JSON.stringify(currentParams()),
@@ -328,6 +382,7 @@ async function start() {
 }
 
 async function stop() {
+  state.previewPinned = false;
   const data = await api("/api/stop", { method: "POST", body: "{}" });
   renderStatus(data);
 }
@@ -335,6 +390,46 @@ async function stop() {
 async function clearLogs() {
   const data = await api("/api/clear-logs", { method: "POST", body: "{}" });
   renderStatus(data);
+}
+
+async function querySiteStatus() {
+  if (!$("monitorEnabledInput").checked) {
+    showNotice("请先开启监听场地下单开关");
+    return;
+  }
+  const date = normalizeDate($("monitorDateInput").value) || state.selectedDates[0] || "";
+  if (!date) {
+    showNotice("请先选择监听日期");
+    return;
+  }
+  $("monitorDateInput").value = date;
+  state.previewPinned = false;
+  $("siteStatusSummary").textContent = `正在查询 ${date} 的场地预约情况...`;
+  const data = await api("/api/site-status", {
+    method: "POST",
+    body: JSON.stringify(currentParams()),
+  });
+  if (!data.success) {
+    $("siteStatusSummary").textContent = `查询失败：${data.error || data.message || "未知错误"}`;
+    if (data.request) {
+      $("requestView").textContent = JSON.stringify(data.request, null, 2);
+    }
+    return;
+  }
+  state.siteListSnapshot = data.snapshot;
+  state.siteStatusQueried = true;
+  const occupiedKeys = new Set(
+    (state.siteListSnapshot.items || [])
+      .filter((item) => !item.available)
+      .map((item) => selectionKey(item.court, item.time_slot))
+  );
+  state.monitorCells = state.monitorCells.filter((item) => occupiedKeys.has(selectionKey(item.court, item.time_slot)));
+  $("siteStatusSummary").textContent = `${data.snapshot.date}：可约 ${data.available_count} 个，已约 ${data.occupied_count} 个`;
+  if (data.request) {
+    $("requestView").textContent = JSON.stringify(data.request, null, 2);
+  }
+  renderChoices();
+  await preview();
 }
 
 async function exportParams() {
@@ -346,6 +441,7 @@ async function exportParams() {
 async function importParams() {
   const params = JSON.parse($("jsonBox").value);
   applyParams(params, { preferParamsToken: true });
+  state.siteStatusQueried = false;
   renderChoices();
   await save();
   await preview();
@@ -356,7 +452,7 @@ function renderStatus(status) {
   $("runState").style.background = status.waiting_for_schedule ? "#fef9c3" : status.running ? "#dcfce7" : "#eef4f3";
   state.logs = status.logs || [];
   renderLogs();
-  if (status.last_request) {
+  if (status.last_request && (!state.previewPinned || status.running || status.waiting_for_schedule)) {
     $("requestView").textContent = JSON.stringify(status.last_request, null, 2);
   }
 }
@@ -435,6 +531,8 @@ function matchesLogFilter(line, filter) {
 function grabbedSummary(line) {
   const target = line.match(/请求（成功）：(.+)$/);
   if (target) return target[1];
+  const monitorTarget = line.match(/监听下单第 \d+ 个请求（成功）：(.+)$/);
+  if (monitorTarget) return monitorTarget[1];
   return "";
 }
 
@@ -509,7 +607,7 @@ async function refreshStatus() {
 async function boot() {
   const metadata = await api("/api/metadata");
   state.snapshot = metadata.snapshot;
-  state.siteListSnapshot = metadata.site_list_snapshot;
+  state.siteListSnapshot = null;
   applyParams(metadata.params);
   if (!$("scheduledStartInput").value) {
     $("scheduledStartInput").value = defaultScheduledStartValue();
@@ -530,8 +628,20 @@ $("importBtn").addEventListener("click", importParams);
 $("singleModeInput").addEventListener("change", preview);
 $("pairModeInput").addEventListener("change", preview);
 $("monitorEnabledInput").addEventListener("change", () => {
+  if ($("monitorEnabledInput").checked) {
+    $("monitorDateInput").value = $("monitorDateInput").value || state.selectedDates[0] || $("dateInput").value;
+  } else {
+    state.monitorCells = [];
+  }
+  state.siteStatusQueried = false;
+  state.siteListSnapshot = null;
   renderChoices();
   preview();
+});
+$("querySiteStatusBtn").addEventListener("click", () => {
+  querySiteStatus().catch((error) => {
+    $("siteStatusSummary").textContent = `查询失败：${error.message}`;
+  });
 });
 $("toggleRequestBtn").addEventListener("click", toggleRequestPanel);
 $("clearLogsBtn").addEventListener("click", clearLogs);
@@ -544,20 +654,35 @@ $("addDateBtn").addEventListener("click", () => {
   if (!date) return;
   state.selectedDates = normalizeDates([...state.selectedDates, date]);
   $("dateInput").value = state.selectedDates[0] || "";
+  if (!$("monitorDateInput").value) {
+    $("monitorDateInput").value = date;
+  }
   renderChoices();
   preview();
 });
 
-for (const id of ["intervalInput", "maxAttemptsInput", "dryRunInput", "verifySslInput", "scheduleEnabledInput", "scheduledStartInput", "wxTokenInput", "shopIdInput", "brandCodeInput"]) {
+for (const id of ["intervalInput", "maxAttemptsInput", "dryRunInput", "verifySslInput", "scheduleEnabledInput", "scheduledStartInput", "monitorIntervalInput", "wxTokenInput", "shopIdInput", "brandCodeInput"]) {
   $(id).addEventListener("change", preview);
 }
 $("wxTokenInput").addEventListener("input", cacheWxToken);
+$("monitorDateInput").addEventListener("change", () => {
+  const date = normalizeDate($("monitorDateInput").value);
+  $("monitorDateInput").value = date;
+  state.siteStatusQueried = false;
+  state.siteListSnapshot = null;
+  state.monitorCells = [];
+  renderChoices();
+  preview();
+});
 
 $("dateInput").addEventListener("change", () => {
   const date = normalizeDate($("dateInput").value);
   if (date) {
     state.selectedDates = normalizeDates([date, ...state.selectedDates]);
     $("dateInput").value = state.selectedDates[0] || "";
+    if (!$("monitorDateInput").value) {
+      $("monitorDateInput").value = date;
+    }
   }
   renderChoices();
   preview();

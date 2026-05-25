@@ -15,7 +15,13 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 
-from .capture import CaptureStore, request_summary, site_list_snapshot_to_dict, snapshot_to_dict
+from .capture import (
+    CaptureStore,
+    request_summary,
+    site_list_payload_to_dict,
+    site_list_snapshot_to_dict,
+    snapshot_to_dict,
+)
 from .http_client import send_request
 
 
@@ -70,6 +76,10 @@ class BookingWebApp:
             "scheduled_start_at": "",
             "date": snapshot.date,
             "dates": [snapshot.date],
+            "monitor_enabled": False,
+            "monitor_date": snapshot.date,
+            "monitor_interval_seconds": 20,
+            "monitor_selections": [],
             "courts": [
                 {
                     "site_id": snapshot.selected_site_id,
@@ -239,6 +249,58 @@ class BookingWebApp:
             state.logs.clear()
         return self.status(client_id)
 
+    def site_status(self, client_id: str, params: dict) -> dict:
+        state = self.state_for(client_id)
+        self._remember_wx_token(state, params)
+        effective = self._merged_params(state, params)
+        saved_params = _without_wx_token(effective)
+        date = _monitor_date(effective)
+        if not date:
+            message = "请先选择监听日期"
+            self.log(state, message)
+            return {"success": False, "error": message, "snapshot": {"date": "", "items": []}}
+
+        request_data = self.capture.build_site_list_request(effective, date)
+        request_summary_data = _safe_request_summary(request_data)
+        with state.lock:
+            state.params = saved_params
+            state.last_request = request_summary_data
+            state.updated_at = time.time()
+
+        self.log(state, f"查询当前场地预约情况：{date}")
+        response = self._send_site_list_request(state, request_data, effective)
+        if not response.get("success"):
+            message = response.get("error") or response.get("message") or "查询失败"
+            self.log(state, f"查询当前场地预约情况失败：{date} {message}")
+            return {
+                "success": False,
+                "error": message,
+                "request": request_summary_data,
+                "response": response,
+                "snapshot": {"date": date, "items": []},
+            }
+
+        snapshot = site_list_payload_to_dict(response.get("payload"), date)
+        available_count = sum(1 for item in snapshot["items"] if item.get("available"))
+        occupied_count = len(snapshot["items"]) - available_count
+        message = f"查询完成：{date}，可约 {available_count} 个，已约 {occupied_count} 个"
+        self.log(state, message)
+        with state.lock:
+            state.last_response = {
+                "success": True,
+                "message": message,
+                "available_count": available_count,
+                "occupied_count": occupied_count,
+            }
+        return {
+            "success": True,
+            "message": message,
+            "request": request_summary_data,
+            "snapshot": snapshot,
+            "available_count": available_count,
+            "occupied_count": occupied_count,
+        }
+
     def _remember_wx_token(self, state: RuntimeState, params: dict) -> None:
         token = str((params.get("headers") or {}).get("wx-token") or "").strip()
         if not token:
@@ -286,13 +348,13 @@ class BookingWebApp:
         attempt = 0
         successful_slot_keys: set[str] = set()
         max_attempts = int(params.get("max_attempts") or 0)
-        interval = max(0.1, float(params.get("interval_seconds") or 0.1))
+        interval = max(0.1, float(params.get("monitor_interval_seconds") or 20))
         targets = _monitor_targets(params)
         if not targets:
             self.log(state, "监听下单未选择目标，请选择已经被预约的场地时间")
             return
 
-        self.log(state, f"开始监听下单：{len(targets)} 个目标")
+        self.log(state, f"开始监听下单：{len(targets)} 个目标，监听间隔 {interval:g} 秒")
         while not state.stop_event.is_set():
             attempt += 1
             self.log(state, f"第 {attempt} 轮监听场地释放")
@@ -589,6 +651,8 @@ class BookingWebApp:
                 merged[key] = _unique_dates(value or [])
             else:
                 merged[key] = value
+        if state.wx_token and not (merged.get("headers") or {}).get("wx-token"):
+            merged.setdefault("headers", {})["wx-token"] = state.wx_token
         return merged
 
 
@@ -765,16 +829,14 @@ def _single_success_notification_message(response: dict, dry_run: bool) -> str:
 def _params_booking_desc(params: dict) -> str:
     monitor_selections = params.get("monitor_selections") or []
     if params.get("monitor_enabled") and monitor_selections:
-        dates = params.get("dates") or ([params.get("date")] if params.get("date") else [])
         targets = []
-        for date in dates:
-            for item in monitor_selections:
-                court = item.get("court") or {}
-                time_slot = item.get("time_slot") or {}
-                targets.append(
-                    f"{date} {court.get('site_name', '未知场地')} "
-                    f"{time_slot.get('start_time', '?')}-{time_slot.get('end_time', '?')}"
-                )
+        for item in _monitor_targets(params):
+            court = item.get("court") or {}
+            time_slot = item.get("time_slot") or {}
+            targets.append(
+                f"{item.get('date') or ''} {court.get('site_name', '未知场地')} "
+                f"{time_slot.get('start_time', '?')}-{time_slot.get('end_time', '?')}"
+            )
         return "；".join(targets[:10]) + (" ..." if len(targets) > 10 else "")
 
     selections = params.get("selections") or []
@@ -813,8 +875,21 @@ def _successful_targets(responses: list[dict]) -> list[str]:
     return targets
 
 
+def _monitor_date(params: dict) -> str:
+    date = str(params.get("monitor_date") or "").strip()
+    if date:
+        return date
+    dates = params.get("dates") or []
+    if dates:
+        return str(dates[0])
+    return str(params.get("date") or "").strip()
+
+
 def _monitor_dates(params: dict) -> list[str]:
-    return params.get("dates") or ([params.get("date")] if params.get("date") else [])
+    date = _monitor_date(params)
+    if date:
+        return [date]
+    return []
 
 
 def _monitor_targets(params: dict) -> list[dict]:
@@ -1179,6 +1254,8 @@ def create_handler(app: BookingWebApp) -> type[BaseHTTPRequestHandler]:
                 self._json(app.stop(client_id))
             elif path == "/api/clear-logs":
                 self._json(app.clear_logs(client_id))
+            elif path == "/api/site-status":
+                self._json(app.site_status(client_id, payload))
             else:
                 self.send_error(404)
 
