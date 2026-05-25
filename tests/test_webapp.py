@@ -112,6 +112,97 @@ class BookingWebAppTest(unittest.TestCase):
         self.assertEqual(snapshot["params"]["selections"][0]["court"]["site_name"], "4号场")
         self.assertEqual(snapshot["params"]["selections"][0]["time_slot"]["start_time"], "08:00")
 
+    def test_admin_task_name_uses_date_court_count_and_main_time(self) -> None:
+        params = {
+            "dates": ["2026/05/28"],
+            "selections": [
+                {
+                    "court": {"site_id": 1, "site_name": "1号场"},
+                    "time_slot": {"start_time": "08:00", "end_time": "09:00"},
+                },
+                {
+                    "court": {"site_id": 1, "site_name": "1号场"},
+                    "time_slot": {"start_time": "07:00", "end_time": "08:00"},
+                },
+                {
+                    "court": {"site_id": 2, "site_name": "2号场"},
+                    "time_slot": {"start_time": "09:00", "end_time": "10:00"},
+                },
+            ],
+        }
+
+        self.assertEqual(webapp._admin_task_name(params), "2026/05/28-2个场地-07:00-08:00")
+
+    def test_admin_page_exposes_import_actions_and_task_controls(self) -> None:
+        app = BookingWebApp("request.txt")
+        app.save_params(
+            "client-a",
+            {
+                "headers": {"wx-token": "token-a"},
+                "dates": ["2026/05/28"],
+                "selections": [
+                    {
+                        "court": {"site_id": 3692729935134806, "site_name": "1号场"},
+                        "time_slot": {
+                            "start_time": "07:00",
+                            "end_time": "08:00",
+                            "start_timestamp": 1779922800,
+                            "end_timestamp": 1779926400,
+                            "price": "75",
+                            "times": "1",
+                        },
+                    }
+                ],
+            },
+        )
+
+        html = _admin_page(app, True)
+
+        self.assertIn("2026/05/28-1个场地-07:00-08:00", html)
+        self.assertIn("导入后开启任务", html)
+        self.assertIn("导入后停止任务", html)
+        self.assertIn('formaction="/sundx/start"', html)
+        self.assertIn("开启任务", html)
+        self.assertIn("停止任务", html)
+
+    def test_admin_start_uses_saved_params_and_cached_wx_token(self) -> None:
+        app = BookingWebApp("request.txt")
+        app.save_params(
+            "client-a",
+            {
+                "headers": {"wx-token": "token-a"},
+                "dates": ["2026/05/28"],
+                "selections": [],
+            },
+        )
+
+        with patch.object(app, "start", return_value={"running": True}) as start:
+            result = app.admin_start("client-a")
+
+        self.assertEqual(result, {"running": True})
+        start.assert_called_once()
+        self.assertEqual(start.call_args.args[0], "client-a")
+        self.assertEqual(start.call_args.args[1]["headers"]["wx-token"], "token-a")
+
+    def test_admin_import_action_can_start_or_stop_imported_tasks(self) -> None:
+        app = BookingWebApp("request.txt")
+        imported = app.admin_import(
+            '{"tasks":[{"client_id":"client-a","params":{"dates":["2026/05/28"],"headers":{"wx-token":"token-a"},"selections":[]}},'
+            '{"client_id":"client-b","params":{"dates":["2026/05/29"],"headers":{"wx-token":"token-b"},"selections":[]}}]}'
+        )
+
+        with patch.object(app, "admin_start") as start:
+            message = app.admin_import_action_message(imported["imported"], "start")
+
+        self.assertEqual(message, "已导入并开启任务：client-a, client-b")
+        self.assertEqual([call.args[0] for call in start.call_args_list], ["client-a", "client-b"])
+
+        with patch.object(app, "admin_stop") as stop:
+            message = app.admin_import_action_message(imported["imported"], "stop")
+
+        self.assertEqual(message, "已导入并停止任务：client-a, client-b")
+        self.assertEqual([call.args[0] for call in stop.call_args_list], ["client-a", "client-b"])
+
     def test_notify_uses_wechat_bot_webhook(self) -> None:
         captured = {}
 

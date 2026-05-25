@@ -263,6 +263,14 @@ class BookingWebApp:
             return {"error": "client not found"}
         return self.stop(client_id)
 
+    def admin_start(self, client_id: str) -> dict:
+        state = self._state_by_id(client_id)
+        if not state:
+            return {"error": "client not found"}
+        with state.lock:
+            params = _with_wx_token(state.params, state.wx_token)
+        return self.start(client_id, params)
+
     def admin_update(self, form: dict[str, list[str]]) -> dict:
         client_id = _form_value(form, "client_id", "default").strip() or "default"
         state = self.state_for(client_id)
@@ -303,6 +311,17 @@ class BookingWebApp:
         if not imported:
             return {"error": "没有找到可导入的任务参数"}
         return {"imported": imported}
+
+    def admin_import_action_message(self, imported: list[str], action: str) -> str:
+        if action == "start":
+            for client_id in imported:
+                self.admin_start(client_id)
+            return f"已导入并开启任务：{', '.join(imported)}"
+        if action == "stop":
+            for client_id in imported:
+                self.admin_stop(client_id)
+            return f"已导入并停止任务：{', '.join(imported)}"
+        return f"已导入任务：{', '.join(imported)}"
 
     def _state_by_id(self, client_id: str) -> RuntimeState | None:
         key = client_id.strip() or "default"
@@ -1165,6 +1184,52 @@ def _selection_count(params: dict) -> int:
     return len(params.get("selections") or [])
 
 
+def _admin_task_name(params: dict) -> str:
+    dates = params.get("dates") or ([params.get("date")] if params.get("date") else [])
+    date = str(dates[0]) if dates else "未选日期"
+    return f"{date}-{_admin_court_count(params)}个场地-{_admin_main_time(params)}"
+
+
+def _admin_court_count(params: dict) -> int:
+    selections = params.get("monitor_selections") if params.get("monitor_enabled") else params.get("selections")
+    court_ids = {
+        str((item.get("court") or {}).get("site_id") or (item.get("court") or {}).get("site_name") or "")
+        for item in selections or []
+        if isinstance(item, dict) and isinstance(item.get("court"), dict)
+    }
+    court_ids = {item for item in court_ids if item}
+    if court_ids:
+        return len(court_ids)
+    fallback_courts = params.get("courts") or []
+    fallback_ids = {
+        str((court or {}).get("site_id") or (court or {}).get("site_name") or "")
+        for court in fallback_courts
+        if isinstance(court, dict)
+    }
+    return len({item for item in fallback_ids if item})
+
+
+def _admin_main_time(params: dict) -> str:
+    selections = params.get("monitor_selections") if params.get("monitor_enabled") else params.get("selections")
+    slots = [
+        item.get("time_slot") or {}
+        for item in selections or []
+        if isinstance(item, dict) and isinstance(item.get("time_slot"), dict)
+    ]
+    if not slots:
+        slots = [slot for slot in params.get("time_slots") or [] if isinstance(slot, dict)]
+    if not slots:
+        return "未选时间"
+
+    def sort_key(slot: dict) -> tuple[str, str]:
+        return (str(slot.get("start_time") or ""), str(slot.get("end_time") or ""))
+
+    first = sorted(slots, key=sort_key)[0]
+    start = str(first.get("start_time") or "?")
+    end = str(first.get("end_time") or "?")
+    return f"{start}-{end}"
+
+
 def _admin_form_to_params(snapshot, current: dict, form: dict[str, list[str]], wx_token: str) -> dict:
     dates = _unique_dates([item.strip().replace("-", "/") for item in _form_value(form, "dates", "").split(",")])
     if not dates:
@@ -1292,6 +1357,11 @@ def _admin_page(app: BookingWebApp, authenticated: bool, message: str = "") -> s
       <form method="post" action="{ADMIN_PATH}/import">
         <label>目标客户端 ID（可选）<input name="client_id" placeholder="例如 default 或 mobile-a" /></label>
         <textarea name="payload" spellcheck="false" placeholder="粘贴任务 JSON，支持单任务导出或导出全部的 JSON"></textarea>
+        <div class="import-actions" role="group" aria-label="导入后操作">
+          <label><input type="radio" name="import_action" value="save" checked /> 仅导入</label>
+          <label><input type="radio" name="import_action" value="start" /> 导入后开启任务</label>
+          <label><input type="radio" name="import_action" value="stop" /> 导入后停止任务</label>
+        </div>
         <button type="submit">导入任务</button>
       </form>
     </section>
@@ -1303,6 +1373,7 @@ def _admin_page(app: BookingWebApp, authenticated: bool, message: str = "") -> s
 
 def _admin_task_card(task: dict, snapshot) -> str:
     params = task.get("params") or {}
+    task_name = _admin_task_name(params)
     status = "等待定时" if task["waiting_for_schedule"] else "运行中" if task["running"] else "已停止"
     status_class = "running" if task["running"] else "waiting" if task["waiting_for_schedule"] else ""
     dates = ", ".join(str(item) for item in params.get("dates") or ([params.get("date")] if params.get("date") else []))
@@ -1323,8 +1394,8 @@ def _admin_task_card(task: dict, snapshot) -> str:
 <details class="task-card">
   <summary class="task-head">
     <div>
-      <h2>{escape(task['client_id'])}</h2>
-      <p>更新时间：{escape(str(task.get('updated_at') or '-'))} · 选择 {escape(str(task.get('selection_count') or 0))} 项 · 日期：{escape(dates or '-')}</p>
+      <h2>{escape(task_name)}</h2>
+      <p>客户端：<code>{escape(task['client_id'])}</code> · 更新时间：{escape(str(task.get('updated_at') or '-'))} · 选择 {escape(str(task.get('selection_count') or 0))} 项 · 日期：{escape(dates or '-')}</p>
     </div>
     <span class="task-head-actions">
       <span class="pill {status_class}">{status}</span>
@@ -1378,8 +1449,9 @@ def _admin_task_card(task: dict, snapshot) -> str:
       </div>
       <div class="task-actions">
         <button type="submit">保存修改</button>
+        <button type="submit" formaction="{ADMIN_PATH}/start" class="primary" {'disabled' if task['running'] else ''}>开启任务</button>
+        <button type="submit" formaction="{ADMIN_PATH}/stop" class="danger" {'disabled' if not task['running'] else ''}>停止任务</button>
         <button type="submit" formaction="{ADMIN_PATH}/export" formtarget="_blank" class="secondary">导出此任务</button>
-        <button type="submit" formaction="{ADMIN_PATH}/stop" class="danger" {'disabled' if not task['running'] else ''}>取消任务</button>
       </div>
     </form>
     <p class="last-log">最后日志：{escape(str(task.get('last_log') or '-'))}</p>
@@ -1420,6 +1492,7 @@ h1, h2, p { margin: 0; }
 h1 { font-size: 22px; }
 h2 { font-size: 16px; }
 p { color: #5f6f6a; }
+code { padding: 1px 5px; border-radius: 4px; background: #eef4f3; color: #42514d; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
 input, textarea, button { border-radius: 6px; border: 1px solid #ccd8d5; font: inherit; }
 input { min-height: 36px; padding: 7px 10px; }
 textarea { width: 100%; min-height: 170px; padding: 10px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
@@ -1437,6 +1510,9 @@ header form { margin: 0; }
 .import-panel, .task-card, .empty-card { margin-bottom: 16px; padding: 16px; background: #fff; border: 1px solid #dce5e2; border-radius: 8px; }
 .import-panel { display: grid; grid-template-columns: minmax(220px, 0.35fr) minmax(420px, 0.65fr); gap: 16px; align-items: start; }
 .import-panel form { display: grid; gap: 10px; }
+.import-actions { display: flex; flex-wrap: wrap; gap: 8px 14px; padding: 10px; border: 1px solid #edf2f0; border-radius: 6px; background: #f8fafc; }
+.import-actions label { display: flex; grid-template-columns: none; align-items: center; gap: 6px; color: #17211f; }
+.import-actions input { width: auto; min-height: 0; }
 .task-list { display: grid; gap: 16px; }
 .task-card { padding: 0; overflow: hidden; }
 .task-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 14px 16px; cursor: pointer; list-style: none; }
@@ -1530,7 +1606,23 @@ def create_handler(app: BookingWebApp) -> type[BaseHTTPRequestHandler]:
                 client = _form_value(form, "client_id", "")
                 if client:
                     app.admin_stop(client)
-                self._html(_admin_page(app, True, f"已请求取消任务：{client}"))
+                self._html(_admin_page(app, True, f"已请求停止任务：{client}"))
+                return
+            if path == f"{ADMIN_PATH}/start":
+                if not self._is_admin():
+                    self._redirect(ADMIN_PATH)
+                    return
+                form = self._read_form_multi()
+                client = _form_value(form, "client_id", "default")
+                if client:
+                    app.admin_update(form)
+                    result = app.admin_start(client)
+                    if result.get("error"):
+                        self._html(_admin_page(app, True, str(result["error"])))
+                    else:
+                        self._html(_admin_page(app, True, f"已开启任务：{client}"))
+                else:
+                    self._html(_admin_page(app, True, "缺少客户端 ID，无法开启任务"))
                 return
             if path == f"{ADMIN_PATH}/update":
                 if not self._is_admin():
@@ -1550,7 +1642,9 @@ def create_handler(app: BookingWebApp) -> type[BaseHTTPRequestHandler]:
                 if result.get("error"):
                     self._html(_admin_page(app, True, str(result["error"])))
                 else:
-                    self._html(_admin_page(app, True, f"已导入任务：{', '.join(result['imported'])}"))
+                    imported = result["imported"]
+                    action = _form_value(form, "import_action", "save")
+                    self._html(_admin_page(app, True, app.admin_import_action_message(imported, action)))
                 return
             if path == f"{ADMIN_PATH}/export":
                 if not self._is_admin():
