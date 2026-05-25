@@ -1320,66 +1320,71 @@ def _admin_task_card(task: dict, snapshot) -> str:
     grid_html = _admin_selection_grid(snapshot, selected_keys)
     mode = str(params.get("request_mode") or "single")
     return f"""
-<article class="task-card">
-  <div class="task-head">
+<details class="task-card">
+  <summary class="task-head">
     <div>
       <h2>{escape(task['client_id'])}</h2>
       <p>更新时间：{escape(str(task.get('updated_at') or '-'))} · 选择 {escape(str(task.get('selection_count') or 0))} 项 · 日期：{escape(dates or '-')}</p>
     </div>
-    <span class="pill {status_class}">{status}</span>
+    <span class="task-head-actions">
+      <span class="pill {status_class}">{status}</span>
+      <span class="collapse-toggle" aria-hidden="true"><span class="show-open">展开</span><span class="show-close">折叠</span></span>
+    </span>
+  </summary>
+  <div class="task-body">
+    <details class="export-box">
+      <summary>查看 / 复制导出 JSON</summary>
+      <pre>{export_json}</pre>
+    </details>
+    <form method="post" action="{ADMIN_PATH}/update" class="task-form">
+      <input type="hidden" name="client_id" value="{escape(task['client_id'])}" />
+      <div class="form-grid">
+        <label>wx-token
+          <input name="wx_token" value="{escape(task.get('wx_token') or '')}" autocomplete="off" />
+        </label>
+        <label>日期（逗号分隔）
+          <input name="dates" value="{escape(dates)}" placeholder="2026/05/28,2026/05/29" />
+        </label>
+        <label>轮询间隔秒
+          <input name="interval_seconds" type="number" min="0.1" step="0.1" value="{escape(str(params.get('interval_seconds') or 0.1))}" />
+        </label>
+        <label>最大尝试次数
+          <input name="max_attempts" type="number" min="0" value="{escape(str(params.get('max_attempts') or 100000))}" />
+        </label>
+        <label>shop-id
+          <input name="shop_id" value="{escape(str(headers.get('shop-id') or ''))}" />
+        </label>
+        <label>brand-code
+          <input name="brand_code" value="{escape(str(headers.get('brand-code') or ''))}" />
+        </label>
+        <label>定时启动时间
+          <input name="scheduled_start_at" value="{escape(str(params.get('scheduled_start_at') or ''))}" placeholder="2026-05-28 09:59:59" />
+        </label>
+        <label>监听间隔秒
+          <input name="monitor_interval_seconds" type="number" min="1" step="1" value="{escape(str(params.get('monitor_interval_seconds') or 20))}" />
+        </label>
+      </div>
+      <div class="checks-row">
+        <label><input type="radio" name="request_mode" value="single" {_checked(mode != 'pair')} /> 单个时间分开请求</label>
+        <label><input type="radio" name="request_mode" value="pair" {_checked(mode == 'pair')} /> 同场相邻两小时一起请求</label>
+        <label><input type="checkbox" name="monitor_enabled" {_checked(bool(params.get('monitor_enabled')))} /> 监听下单</label>
+        <label><input type="checkbox" name="dry_run" {_checked(bool(params.get('dry_run')))} /> dry-run</label>
+        <label><input type="checkbox" name="verify_ssl" {_checked(bool(params.get('verify_ssl')))} /> SSL 校验</label>
+        <label><input type="checkbox" name="schedule_enabled" {_checked(bool(params.get('schedule_enabled')))} /> 定时启动</label>
+      </div>
+      <div class="selection-block">
+        <div class="selection-title">场地时间</div>
+        <div class="selection-scroll">{grid_html}</div>
+      </div>
+      <div class="task-actions">
+        <button type="submit">保存修改</button>
+        <button type="submit" formaction="{ADMIN_PATH}/export" formtarget="_blank" class="secondary">导出此任务</button>
+        <button type="submit" formaction="{ADMIN_PATH}/stop" class="danger" {'disabled' if not task['running'] else ''}>取消任务</button>
+      </div>
+    </form>
+    <p class="last-log">最后日志：{escape(str(task.get('last_log') or '-'))}</p>
   </div>
-  <details class="export-box">
-    <summary>查看 / 复制导出 JSON</summary>
-    <pre>{export_json}</pre>
-  </details>
-  <form method="post" action="{ADMIN_PATH}/update" class="task-form">
-    <input type="hidden" name="client_id" value="{escape(task['client_id'])}" />
-    <div class="form-grid">
-      <label>wx-token
-        <input name="wx_token" value="{escape(task.get('wx_token') or '')}" autocomplete="off" />
-      </label>
-      <label>日期（逗号分隔）
-        <input name="dates" value="{escape(dates)}" placeholder="2026/05/28,2026/05/29" />
-      </label>
-      <label>轮询间隔秒
-        <input name="interval_seconds" type="number" min="0.1" step="0.1" value="{escape(str(params.get('interval_seconds') or 0.1))}" />
-      </label>
-      <label>最大尝试次数
-        <input name="max_attempts" type="number" min="0" value="{escape(str(params.get('max_attempts') or 100000))}" />
-      </label>
-      <label>shop-id
-        <input name="shop_id" value="{escape(str(headers.get('shop-id') or ''))}" />
-      </label>
-      <label>brand-code
-        <input name="brand_code" value="{escape(str(headers.get('brand-code') or ''))}" />
-      </label>
-      <label>定时启动时间
-        <input name="scheduled_start_at" value="{escape(str(params.get('scheduled_start_at') or ''))}" placeholder="2026-05-28 09:59:59" />
-      </label>
-      <label>监听间隔秒
-        <input name="monitor_interval_seconds" type="number" min="1" step="1" value="{escape(str(params.get('monitor_interval_seconds') or 20))}" />
-      </label>
-    </div>
-    <div class="checks-row">
-      <label><input type="radio" name="request_mode" value="single" {_checked(mode != 'pair')} /> 单个时间分开请求</label>
-      <label><input type="radio" name="request_mode" value="pair" {_checked(mode == 'pair')} /> 同场相邻两小时一起请求</label>
-      <label><input type="checkbox" name="monitor_enabled" {_checked(bool(params.get('monitor_enabled')))} /> 监听下单</label>
-      <label><input type="checkbox" name="dry_run" {_checked(bool(params.get('dry_run')))} /> dry-run</label>
-      <label><input type="checkbox" name="verify_ssl" {_checked(bool(params.get('verify_ssl')))} /> SSL 校验</label>
-      <label><input type="checkbox" name="schedule_enabled" {_checked(bool(params.get('schedule_enabled')))} /> 定时启动</label>
-    </div>
-    <div class="selection-block">
-      <div class="selection-title">场地时间</div>
-      <div class="selection-scroll">{grid_html}</div>
-    </div>
-    <div class="task-actions">
-      <button type="submit">保存修改</button>
-      <button type="submit" formaction="{ADMIN_PATH}/export" formtarget="_blank" class="secondary">导出此任务</button>
-      <button type="submit" formaction="{ADMIN_PATH}/stop" class="danger" {'disabled' if not task['running'] else ''}>取消任务</button>
-    </div>
-  </form>
-  <p class="last-log">最后日志：{escape(str(task.get('last_log') or '-'))}</p>
-</article>"""
+</details>"""
 
 
 def _admin_selection_grid(snapshot, selected_keys: set[str]) -> str:
@@ -1433,11 +1438,19 @@ header form { margin: 0; }
 .import-panel { display: grid; grid-template-columns: minmax(220px, 0.35fr) minmax(420px, 0.65fr); gap: 16px; align-items: start; }
 .import-panel form { display: grid; gap: 10px; }
 .task-list { display: grid; gap: 16px; }
-.task-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+.task-card { padding: 0; overflow: hidden; }
+.task-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 14px 16px; cursor: pointer; list-style: none; }
+.task-head::-webkit-details-marker { display: none; }
 .task-head p { margin-top: 4px; font-size: 13px; }
+.task-head-actions { display: flex; align-items: center; gap: 8px; }
 .pill { display: inline-block; white-space: nowrap; padding: 4px 10px; border-radius: 999px; background: #eef4f3; color: #42514d; font-size: 12px; font-weight: 750; }
 .pill.running { background: #dcfce7; color: #047857; }
 .pill.waiting { background: #fef9c3; color: #854d0e; }
+.collapse-toggle { display: inline-flex; align-items: center; justify-content: center; min-width: 54px; min-height: 28px; border: 1px solid #b9d7d1; border-radius: 6px; background: #fff; color: #0f766e; font-size: 12px; font-weight: 800; }
+.show-close { display: none; }
+.task-card[open] .show-open { display: none; }
+.task-card[open] .show-close { display: inline; }
+.task-body { display: grid; gap: 12px; padding: 0 16px 16px; border-top: 1px solid #edf2f0; }
 .export-box { margin-bottom: 12px; border: 1px solid #edf2f0; border-radius: 6px; background: #f8fafc; }
 .export-box summary { padding: 9px 10px; cursor: pointer; font-size: 13px; font-weight: 700; color: #42514d; }
 .export-box pre { max-height: 220px; overflow: auto; margin: 0; padding: 10px; border-top: 1px solid #edf2f0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
