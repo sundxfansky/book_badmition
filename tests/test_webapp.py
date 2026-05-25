@@ -61,6 +61,57 @@ class BookingWebAppTest(unittest.TestCase):
             finally:
                 webapp.ADMIN_CONFIG_PATH = original_path
 
+    def test_admin_export_import_and_update_task(self) -> None:
+        app = BookingWebApp("request.txt")
+        app.save_params(
+            "client-a",
+            {
+                "headers": {"wx-token": "token-a"},
+                "dates": ["2026/05/28"],
+                "selections": [
+                    {
+                        "court": {"site_id": 3692729935134806, "site_name": "1号场"},
+                        "time_slot": {
+                            "start_time": "07:00",
+                            "end_time": "08:00",
+                            "start_timestamp": 1779922800,
+                            "end_timestamp": 1779926400,
+                            "price": "75",
+                            "times": "1",
+                        },
+                    }
+                ],
+            },
+        )
+
+        exported = app.admin_task_export("client-a")
+        self.assertEqual(exported["params"]["headers"]["wx-token"], "token-a")
+
+        imported = app.admin_import(
+            '{"client_id":"client-b","params":{"dates":["2026/05/29"],"headers":{"wx-token":"token-b"},"selections":[]}}'
+        )
+        self.assertEqual(imported["imported"], ["client-b"])
+        self.assertEqual(app.admin_snapshot()["tasks"][1]["wx_token"], "token-b")
+
+        app.admin_update(
+            {
+                "client_id": ["client-a"],
+                "wx_token": ["token-c"],
+                "dates": ["2026/05/30"],
+                "interval_seconds": ["0.2"],
+                "max_attempts": ["50"],
+                "request_mode": ["single"],
+                "selection": ["3692729935134809|08:00-09:00"],
+            }
+        )
+        snapshot = app.admin_snapshot()["tasks"][0]
+        self.assertEqual(snapshot["wx_token"], "token-c")
+        self.assertEqual(snapshot["params"]["dates"], ["2026/05/30"])
+        self.assertEqual(snapshot["params"]["interval_seconds"], 0.2)
+        self.assertEqual(snapshot["params"]["max_attempts"], 50)
+        self.assertEqual(snapshot["params"]["selections"][0]["court"]["site_name"], "4号场")
+        self.assertEqual(snapshot["params"]["selections"][0]["time_slot"]["start_time"], "08:00")
+
     def test_notify_uses_wechat_bot_webhook(self) -> None:
         captured = {}
 

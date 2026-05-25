@@ -224,7 +224,8 @@ class BookingWebApp:
                         "updated_at": _format_timestamp(state.updated_at),
                         "date": params.get("date", ""),
                         "dates": params.get("dates", []),
-                        "selection_count": len(params.get("selections") or params.get("monitor_selections") or []),
+                        "params": params,
+                        "selection_count": _selection_count(params),
                         "interval_seconds": params.get("interval_seconds"),
                         "max_attempts": params.get("max_attempts"),
                         "dry_run": params.get("dry_run"),
@@ -236,12 +237,77 @@ class BookingWebApp:
             "tasks": rows,
         }
 
+    def admin_task_export(self, client_id: str) -> dict:
+        state = self._state_by_id(client_id)
+        if not state:
+            return {"error": "client not found"}
+        with state.lock:
+            return {
+                "client_id": client_id,
+                "exported_at": _format_timestamp(time.time()),
+                "params": _with_wx_token(state.params, state.wx_token),
+            }
+
+    def admin_all_export(self) -> dict:
+        with self.states_lock:
+            client_ids = sorted(self.states)
+        return {
+            "exported_at": _format_timestamp(time.time()),
+            "tasks": [self.admin_task_export(client_id) for client_id in client_ids],
+        }
+
     def admin_stop(self, client_id: str) -> dict:
         with self.states_lock:
             exists = client_id in self.states
         if not exists:
             return {"error": "client not found"}
         return self.stop(client_id)
+
+    def admin_update(self, form: dict[str, list[str]]) -> dict:
+        client_id = _form_value(form, "client_id", "default").strip() or "default"
+        state = self.state_for(client_id)
+        current = self._merged_params(state, {})
+        token = _form_value(form, "wx_token", "").strip()
+        with state.lock:
+            state.wx_token = token
+        params = _admin_form_to_params(self.capture.venue_snapshot(), current, form, token)
+        return self.save_params(client_id, params)
+
+    def admin_import(self, payload_text: str, fallback_client_id: str = "") -> dict:
+        try:
+            payload = json.loads(payload_text)
+        except json.JSONDecodeError as exc:
+            return {"error": f"JSON 格式错误：{exc}"}
+
+        if isinstance(payload, dict) and isinstance(payload.get("tasks"), list):
+            entries = payload["tasks"]
+        else:
+            entries = [payload]
+
+        imported = []
+        for index, entry in enumerate(entries, start=1):
+            if not isinstance(entry, dict):
+                continue
+            params = entry.get("params") if isinstance(entry.get("params"), dict) else entry
+            client_id = str(entry.get("client_id") or fallback_client_id or f"imported-{index}").strip()
+            if not client_id or not isinstance(params, dict):
+                continue
+            state = self.state_for(client_id)
+            headers = params.get("headers") if isinstance(params.get("headers"), dict) else {}
+            if "wx-token" in headers:
+                with state.lock:
+                    state.wx_token = str(headers.get("wx-token") or "").strip()
+            self.save_params(client_id, params)
+            imported.append(client_id)
+
+        if not imported:
+            return {"error": "没有找到可导入的任务参数"}
+        return {"imported": imported}
+
+    def _state_by_id(self, client_id: str) -> RuntimeState | None:
+        key = client_id.strip() or "default"
+        with self.states_lock:
+            return self.states.get(key)
 
     def clear_logs(self, client_id: str) -> dict:
         state = self.state_for(client_id)
@@ -764,6 +830,14 @@ def _without_wx_token(params: dict) -> dict:
     return clean
 
 
+def _with_wx_token(params: dict, wx_token: str) -> dict:
+    full = json.loads(json.dumps(params or {}, ensure_ascii=False))
+    full.setdefault("headers", {})
+    if wx_token:
+        full["headers"]["wx-token"] = wx_token
+    return full
+
+
 def _safe_request_summary(request_data: dict) -> dict:
     summary = request_summary(request_data)
     headers = summary.get("headers")
@@ -1071,6 +1145,87 @@ def _format_timestamp(timestamp: float) -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
 
 
+def _form_values(form: dict[str, list[str]], key: str) -> list[str]:
+    values = form.get(key) or []
+    return [str(item) for item in values]
+
+
+def _form_value(form: dict[str, list[str]], key: str, default: str = "") -> str:
+    values = _form_values(form, key)
+    return values[-1] if values else default
+
+
+def _form_bool(form: dict[str, list[str]], key: str) -> bool:
+    return key in form
+
+
+def _selection_count(params: dict) -> int:
+    if params.get("monitor_enabled"):
+        return len(params.get("monitor_selections") or [])
+    return len(params.get("selections") or [])
+
+
+def _admin_form_to_params(snapshot, current: dict, form: dict[str, list[str]], wx_token: str) -> dict:
+    dates = _unique_dates([item.strip().replace("-", "/") for item in _form_value(form, "dates", "").split(",")])
+    if not dates:
+        date = _form_value(form, "date", str(current.get("date") or snapshot.date)).strip().replace("-", "/")
+        dates = [date] if date else []
+
+    courts_by_id = {str(court.site_id): court.__dict__ for court in snapshot.courts}
+    times_by_key = {f"{time.start_time}-{time.end_time}": time.__dict__ for time in snapshot.times}
+    selections = []
+    for value in _form_values(form, "selection"):
+        if "|" not in value:
+            continue
+        court_id, time_key = value.split("|", 1)
+        court = courts_by_id.get(court_id)
+        time_slot = times_by_key.get(time_key)
+        if court and time_slot:
+            selections.append({"court": court, "time_slot": time_slot})
+
+    monitor_enabled = _form_bool(form, "monitor_enabled")
+    params = json.loads(json.dumps(current or {}, ensure_ascii=False))
+    params.update(
+        {
+            "date": dates[0] if dates else "",
+            "dates": dates,
+            "monitor_enabled": monitor_enabled,
+            "monitor_date": dates[0] if dates else "",
+            "monitor_interval_seconds": _to_number(
+                _form_value(form, "monitor_interval_seconds", str(current.get("monitor_interval_seconds") or 20)),
+                20,
+            ),
+            "request_mode": _form_value(form, "request_mode", str(current.get("request_mode") or "single")),
+            "dry_run": _form_bool(form, "dry_run"),
+            "verify_ssl": _form_bool(form, "verify_ssl"),
+            "schedule_enabled": _form_bool(form, "schedule_enabled"),
+            "scheduled_start_at": _form_value(form, "scheduled_start_at", ""),
+            "interval_seconds": _to_number(_form_value(form, "interval_seconds", str(current.get("interval_seconds") or 0.1)), 0.1),
+            "max_attempts": int(_to_number(_form_value(form, "max_attempts", str(current.get("max_attempts") or 100000)), 100000)),
+            "headers": {
+                **(current.get("headers") or {}),
+                "wx-token": wx_token,
+                "shop-id": _form_value(form, "shop_id", str((current.get("headers") or {}).get("shop-id") or "")),
+                "brand-code": _form_value(form, "brand_code", str((current.get("headers") or {}).get("brand-code") or "")),
+            },
+        }
+    )
+    if monitor_enabled:
+        params["selections"] = []
+        params["monitor_selections"] = selections
+    else:
+        params["selections"] = selections
+        params["monitor_selections"] = []
+    return params
+
+
+def _to_number(value: str, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _admin_page(app: BookingWebApp, authenticated: bool, message: str = "") -> str:
     if not authenticated:
         mode = "设置管理密码" if not app.admin.password_set() else "管理登录"
@@ -1097,37 +1252,19 @@ def _admin_page(app: BookingWebApp, authenticated: bool, message: str = "") -> s
 </body>
 </html>"""
 
-    snapshot = app.admin_snapshot()
-    rows = []
-    for task in snapshot["tasks"]:
-        status = "等待定时" if task["waiting_for_schedule"] else "运行中" if task["running"] else "已停止"
-        dates = ", ".join(str(item) for item in task["dates"]) or str(task["date"] or "")
-        rows.append(
-            "<tr>"
-            f"<td><code>{escape(task['client_id'])}</code></td>"
-            f"<td><span class=\"pill\">{status}</span></td>"
-            f"<td>{escape(str(task['scheduled_start_at'] or '-'))}</td>"
-            f"<td><code>{escape(task['wx_token'] or '-')}</code></td>"
-            f"<td>{escape(dates)}</td>"
-            f"<td>{escape(str(task['selection_count']))}</td>"
-            f"<td>{escape(str(task['updated_at']))}</td>"
-            f"<td>{escape(task['last_log'])}</td>"
-            "<td>"
-            f"<form method=\"post\" action=\"{ADMIN_PATH}/stop\">"
-            f"<input type=\"hidden\" name=\"client_id\" value=\"{escape(task['client_id'])}\" />"
-            f"<button type=\"submit\" {'disabled' if not task['running'] else ''}>取消任务</button>"
-            "</form>"
-            "</td>"
-            "</tr>"
-        )
-    body = "\n".join(rows) or "<tr><td colspan=\"9\" class=\"empty\">暂无任务</td></tr>"
+    admin_snapshot = app.admin_snapshot()
+    venue_snapshot = app.capture.venue_snapshot()
+    task_cards = [
+        _admin_task_card(task, venue_snapshot)
+        for task in admin_snapshot["tasks"]
+    ]
+    body = "\n".join(task_cards) or "<section class=\"empty-card\">暂无任务。打开前台页面保存一次参数，或在上方导入任务 JSON。</section>"
     notice_html = f'<div class="notice">{escape(message)}</div>' if message else ""
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta http-equiv="refresh" content="5" />
   <title>后端管理</title>
   <style>{_admin_css()}</style>
 </head>
@@ -1136,30 +1273,137 @@ def _admin_page(app: BookingWebApp, authenticated: bool, message: str = "") -> s
     <header>
       <div>
         <h1>后端管理</h1>
-        <p>查看 wx-token、当前任务、定时任务，并取消运行中的任务。</p>
+        <p>导入导出任务，查看和修改 wx-token、日期、场地时间与运行参数。</p>
       </div>
-      <a href="{ADMIN_PATH}">刷新</a>
+      <nav>
+        <a href="{ADMIN_PATH}">刷新</a>
+        <form method="post" action="{ADMIN_PATH}/export" target="_blank">
+          <input type="hidden" name="client_id" value="__all__" />
+          <button type="submit" class="link-button">导出全部</button>
+        </form>
+      </nav>
     </header>
     {notice_html}
-    <table>
-      <thead>
-        <tr>
-          <th>客户端</th>
-          <th>状态</th>
-          <th>定时启动</th>
-          <th>wx-token</th>
-          <th>日期</th>
-          <th>选择数</th>
-          <th>更新时间</th>
-          <th>最后日志</th>
-          <th>操作</th>
-        </tr>
-      </thead>
-      <tbody>{body}</tbody>
-    </table>
+    <section class="import-panel">
+      <div>
+        <h2>导入任务</h2>
+        <p>粘贴单个任务参数、单任务导出 JSON，或“导出全部”的 JSON。可填写客户端 ID 覆盖导入目标。</p>
+      </div>
+      <form method="post" action="{ADMIN_PATH}/import">
+        <label>目标客户端 ID（可选）<input name="client_id" placeholder="例如 default 或 mobile-a" /></label>
+        <textarea name="payload" spellcheck="false" placeholder="粘贴任务 JSON，支持单任务导出或导出全部的 JSON"></textarea>
+        <button type="submit">导入任务</button>
+      </form>
+    </section>
+    <section class="task-list">{body}</section>
   </main>
 </body>
 </html>"""
+
+
+def _admin_task_card(task: dict, snapshot) -> str:
+    params = task.get("params") or {}
+    status = "等待定时" if task["waiting_for_schedule"] else "运行中" if task["running"] else "已停止"
+    status_class = "running" if task["running"] else "waiting" if task["waiting_for_schedule"] else ""
+    dates = ", ".join(str(item) for item in params.get("dates") or ([params.get("date")] if params.get("date") else []))
+    headers = params.get("headers") or {}
+    selections = params.get("monitor_selections") if params.get("monitor_enabled") else params.get("selections")
+    selected_keys = {
+        f"{item.get('court', {}).get('site_id')}|{item.get('time_slot', {}).get('start_time')}-{item.get('time_slot', {}).get('end_time')}"
+        for item in selections or []
+    }
+    export_payload = {
+        "client_id": task["client_id"],
+        "params": _with_wx_token(params, task.get("wx_token") or ""),
+    }
+    export_json = escape(json.dumps(export_payload, ensure_ascii=False, indent=2))
+    grid_html = _admin_selection_grid(snapshot, selected_keys)
+    mode = str(params.get("request_mode") or "single")
+    return f"""
+<article class="task-card">
+  <div class="task-head">
+    <div>
+      <h2>{escape(task['client_id'])}</h2>
+      <p>更新时间：{escape(str(task.get('updated_at') or '-'))} · 选择 {escape(str(task.get('selection_count') or 0))} 项 · 日期：{escape(dates or '-')}</p>
+    </div>
+    <span class="pill {status_class}">{status}</span>
+  </div>
+  <details class="export-box">
+    <summary>查看 / 复制导出 JSON</summary>
+    <pre>{export_json}</pre>
+  </details>
+  <form method="post" action="{ADMIN_PATH}/update" class="task-form">
+    <input type="hidden" name="client_id" value="{escape(task['client_id'])}" />
+    <div class="form-grid">
+      <label>wx-token
+        <input name="wx_token" value="{escape(task.get('wx_token') or '')}" autocomplete="off" />
+      </label>
+      <label>日期（逗号分隔）
+        <input name="dates" value="{escape(dates)}" placeholder="2026/05/28,2026/05/29" />
+      </label>
+      <label>轮询间隔秒
+        <input name="interval_seconds" type="number" min="0.1" step="0.1" value="{escape(str(params.get('interval_seconds') or 0.1))}" />
+      </label>
+      <label>最大尝试次数
+        <input name="max_attempts" type="number" min="0" value="{escape(str(params.get('max_attempts') or 100000))}" />
+      </label>
+      <label>shop-id
+        <input name="shop_id" value="{escape(str(headers.get('shop-id') or ''))}" />
+      </label>
+      <label>brand-code
+        <input name="brand_code" value="{escape(str(headers.get('brand-code') or ''))}" />
+      </label>
+      <label>定时启动时间
+        <input name="scheduled_start_at" value="{escape(str(params.get('scheduled_start_at') or ''))}" placeholder="2026-05-28 09:59:59" />
+      </label>
+      <label>监听间隔秒
+        <input name="monitor_interval_seconds" type="number" min="1" step="1" value="{escape(str(params.get('monitor_interval_seconds') or 20))}" />
+      </label>
+    </div>
+    <div class="checks-row">
+      <label><input type="radio" name="request_mode" value="single" {_checked(mode != 'pair')} /> 单个时间分开请求</label>
+      <label><input type="radio" name="request_mode" value="pair" {_checked(mode == 'pair')} /> 同场相邻两小时一起请求</label>
+      <label><input type="checkbox" name="monitor_enabled" {_checked(bool(params.get('monitor_enabled')))} /> 监听下单</label>
+      <label><input type="checkbox" name="dry_run" {_checked(bool(params.get('dry_run')))} /> dry-run</label>
+      <label><input type="checkbox" name="verify_ssl" {_checked(bool(params.get('verify_ssl')))} /> SSL 校验</label>
+      <label><input type="checkbox" name="schedule_enabled" {_checked(bool(params.get('schedule_enabled')))} /> 定时启动</label>
+    </div>
+    <div class="selection-block">
+      <div class="selection-title">场地时间</div>
+      <div class="selection-scroll">{grid_html}</div>
+    </div>
+    <div class="task-actions">
+      <button type="submit">保存修改</button>
+      <button type="submit" formaction="{ADMIN_PATH}/export" formtarget="_blank" class="secondary">导出此任务</button>
+      <button type="submit" formaction="{ADMIN_PATH}/stop" class="danger" {'disabled' if not task['running'] else ''}>取消任务</button>
+    </div>
+  </form>
+  <p class="last-log">最后日志：{escape(str(task.get('last_log') or '-'))}</p>
+</article>"""
+
+
+def _admin_selection_grid(snapshot, selected_keys: set[str]) -> str:
+    cells = ['<div class="grid-head corner">时间 / 场地</div>']
+    for court in snapshot.courts:
+        cells.append(f'<div class="grid-head">{escape(court.site_name)}</div>')
+    for time_option in snapshot.times:
+        time_key = f"{time_option.start_time}-{time_option.end_time}"
+        cells.append(f'<div class="grid-time">{escape(time_key)}</div>')
+        for court in snapshot.courts:
+            value = f"{court.site_id}|{time_key}"
+            checked = _checked(value in selected_keys)
+            cells.append(
+                '<label class="grid-choice">'
+                f'<input type="checkbox" name="selection" value="{escape(value)}" {checked} />'
+                f'<span>{escape(str(time_option.price))}元</span>'
+                '</label>'
+            )
+    columns = f"112px repeat({len(snapshot.courts)}, minmax(78px, 1fr))"
+    return f'<div class="selection-grid" style="grid-template-columns:{columns}">{"".join(cells)}</div>'
+
+
+def _checked(value: bool) -> str:
+    return "checked" if value else ""
 
 
 def _admin_css() -> str:
@@ -1167,25 +1411,60 @@ def _admin_css() -> str:
 * { box-sizing: border-box; }
 body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f6f8f9; color: #17211f; }
 .auth { width: min(420px, calc(100vw - 32px)); margin: 12vh auto; padding: 24px; background: #fff; border: 1px solid #dce5e2; border-radius: 8px; }
-h1 { margin: 0 0 8px; font-size: 22px; }
-p { margin: 0 0 18px; color: #5f6f6a; }
-input, button { width: 100%; height: 40px; border-radius: 6px; border: 1px solid #ccd8d5; font: inherit; }
-input { padding: 0 12px; margin-bottom: 12px; }
-button { background: #0f766e; color: #fff; border: 0; cursor: pointer; }
+h1, h2, p { margin: 0; }
+h1 { font-size: 22px; }
+h2 { font-size: 16px; }
+p { color: #5f6f6a; }
+input, textarea, button { border-radius: 6px; border: 1px solid #ccd8d5; font: inherit; }
+input { min-height: 36px; padding: 7px 10px; }
+textarea { width: 100%; min-height: 170px; padding: 10px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+button { min-height: 34px; padding: 0 12px; background: #0f766e; color: #fff; border: 0; cursor: pointer; font-weight: 650; }
 button:disabled { background: #a7b7b3; cursor: not-allowed; }
 .error, .notice { padding: 10px 12px; margin-bottom: 14px; border-radius: 6px; background: #fff1f2; color: #be123c; }
 .notice { background: #ecfdf5; color: #047857; }
 .admin { width: min(1380px, calc(100vw - 32px)); margin: 24px auto; }
 header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
 header a { color: #0f766e; text-decoration: none; }
-table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #dce5e2; border-radius: 8px; overflow: hidden; }
-th, td { padding: 10px 12px; border-bottom: 1px solid #edf2f0; text-align: left; vertical-align: top; font-size: 13px; }
-th { background: #f0f5f3; color: #42514d; font-weight: 650; }
-td code { word-break: break-all; white-space: normal; }
-.pill { display: inline-block; padding: 3px 8px; border-radius: 999px; background: #eef4f3; }
-td form { margin: 0; }
-td button { width: 88px; height: 32px; }
-.empty { text-align: center; color: #6b7c77; }
+header nav { display: flex; align-items: center; gap: 10px; }
+header form { margin: 0; }
+.link-button, .secondary { background: #fff; color: #0f766e; border: 1px solid #b9d7d1; }
+.danger { background: #fff1f2; color: #b42318; border: 1px solid #fecaca; }
+.import-panel, .task-card, .empty-card { margin-bottom: 16px; padding: 16px; background: #fff; border: 1px solid #dce5e2; border-radius: 8px; }
+.import-panel { display: grid; grid-template-columns: minmax(220px, 0.35fr) minmax(420px, 0.65fr); gap: 16px; align-items: start; }
+.import-panel form { display: grid; gap: 10px; }
+.task-list { display: grid; gap: 16px; }
+.task-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+.task-head p { margin-top: 4px; font-size: 13px; }
+.pill { display: inline-block; white-space: nowrap; padding: 4px 10px; border-radius: 999px; background: #eef4f3; color: #42514d; font-size: 12px; font-weight: 750; }
+.pill.running { background: #dcfce7; color: #047857; }
+.pill.waiting { background: #fef9c3; color: #854d0e; }
+.export-box { margin-bottom: 12px; border: 1px solid #edf2f0; border-radius: 6px; background: #f8fafc; }
+.export-box summary { padding: 9px 10px; cursor: pointer; font-size: 13px; font-weight: 700; color: #42514d; }
+.export-box pre { max-height: 220px; overflow: auto; margin: 0; padding: 10px; border-top: 1px solid #edf2f0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.task-form { display: grid; gap: 12px; }
+.form-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+label { display: grid; gap: 5px; color: #5f6f6a; font-size: 12px; font-weight: 650; }
+label input { width: 100%; }
+.checks-row { display: flex; flex-wrap: wrap; gap: 10px 16px; padding: 10px; border: 1px solid #edf2f0; border-radius: 6px; background: #f8fafc; }
+.checks-row label { display: flex; grid-template-columns: none; align-items: center; gap: 6px; color: #17211f; }
+.checks-row input, .grid-choice input { width: auto; min-height: 0; }
+.selection-block { display: grid; gap: 8px; }
+.selection-title { color: #42514d; font-size: 13px; font-weight: 800; }
+.selection-scroll { overflow: auto; border: 1px solid #dce5e2; border-radius: 8px; background: #fff; }
+.selection-grid { display: grid; min-width: 980px; gap: 4px; padding: 8px; }
+.grid-head, .grid-time, .grid-choice { min-height: 32px; border: 1px solid #dce5e2; border-radius: 6px; padding: 6px 7px; font-size: 12px; }
+.grid-head { position: sticky; top: 8px; z-index: 2; background: #eef4f3; color: #0f766e; text-align: center; font-weight: 800; }
+.corner { left: 8px; z-index: 3; }
+.grid-time { position: sticky; left: 8px; z-index: 1; background: #fff; color: #5f6f6a; font-weight: 750; }
+.grid-choice { display: flex; align-items: center; justify-content: center; gap: 5px; color: #17211f; }
+.grid-choice:has(input:checked) { border-color: #0f766e; background: #eef4f3; color: #0f766e; font-weight: 800; }
+.task-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.last-log { margin-top: 2px; padding: 9px 10px; border-radius: 6px; background: #f8fafc; font-size: 12px; overflow-wrap: anywhere; }
+.empty-card { color: #5f6f6a; text-align: center; }
+@media (max-width: 920px) {
+  .import-panel, .form-grid { grid-template-columns: 1fr; }
+  header { align-items: flex-start; flex-direction: column; }
+}
 """
 
 
@@ -1234,11 +1513,40 @@ def create_handler(app: BookingWebApp) -> type[BaseHTTPRequestHandler]:
                 if not self._is_admin():
                     self._redirect(ADMIN_PATH)
                     return
-                form = self._read_form()
-                client = str(form.get("client_id", ""))
+                form = self._read_form_multi()
+                client = _form_value(form, "client_id", "")
                 if client:
                     app.admin_stop(client)
                 self._html(_admin_page(app, True, f"已请求取消任务：{client}"))
+                return
+            if path == f"{ADMIN_PATH}/update":
+                if not self._is_admin():
+                    self._redirect(ADMIN_PATH)
+                    return
+                form = self._read_form_multi()
+                client = _form_value(form, "client_id", "default")
+                app.admin_update(form)
+                self._html(_admin_page(app, True, f"已保存任务：{client}"))
+                return
+            if path == f"{ADMIN_PATH}/import":
+                if not self._is_admin():
+                    self._redirect(ADMIN_PATH)
+                    return
+                form = self._read_form_multi()
+                result = app.admin_import(_form_value(form, "payload", ""), _form_value(form, "client_id", ""))
+                if result.get("error"):
+                    self._html(_admin_page(app, True, str(result["error"])))
+                else:
+                    self._html(_admin_page(app, True, f"已导入任务：{', '.join(result['imported'])}"))
+                return
+            if path == f"{ADMIN_PATH}/export":
+                if not self._is_admin():
+                    self._redirect(ADMIN_PATH)
+                    return
+                form = self._read_form_multi()
+                client = _form_value(form, "client_id", "")
+                payload = app.admin_all_export() if client == "__all__" else app.admin_task_export(client)
+                self._json(payload)
                 return
 
             payload = self._read_json()
@@ -1273,7 +1581,14 @@ def create_handler(app: BookingWebApp) -> type[BaseHTTPRequestHandler]:
             if not length:
                 return {}
             data = self.rfile.read(length).decode("utf-8")
-            return {key: values[-1] for key, values in parse_qs(data).items()}
+            return {key: values[-1] for key, values in parse_qs(data, keep_blank_values=True).items()}
+
+        def _read_form_multi(self) -> dict[str, list[str]]:
+            length = int(self.headers.get("content-length", "0"))
+            if not length:
+                return {}
+            data = self.rfile.read(length).decode("utf-8")
+            return {key: values for key, values in parse_qs(data, keep_blank_values=True).items()}
 
         def _client_id(self) -> str:
             return str(self.headers.get("x-client-id") or "default")
