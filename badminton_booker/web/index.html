@@ -115,6 +115,38 @@
         <p class="field-hint">普通抢票可直接选择可预约目标；监听模式需要先查询实时状态，只能选择“已约”的场地时间。</p>
         <div id="scheduleGrid" class="schedule-grid"></div>
 
+        <details id="reservedLookupPanel" class="fold-panel">
+          <summary>
+            <span>查询被预约场地</span>
+            <small id="reservedLookupSummary">未查询</small>
+          </summary>
+          <div class="fold-body">
+            <div class="row reserved-actions">
+              <input id="reservedDateInput" type="text" placeholder="2026/05/28" />
+              <button id="queryReservedBtn" type="button">查询被预约场地</button>
+            </div>
+            <div class="reserved-table-wrap">
+              <table class="reserved-table">
+                <thead>
+                  <tr>
+                    <th>日期</th>
+                    <th>场地</th>
+                    <th>时间</th>
+                    <th>原因</th>
+                    <th>预订人</th>
+                    <th>手机号</th>
+                  </tr>
+                </thead>
+                <tbody id="reservedTableBody">
+                  <tr>
+                    <td colspan="6" class="empty-table">输入日期后查询。</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </details>
+
         <h3>导入 / 导出</h3>
         <div class="import-export">
           <textarea id="jsonBox" spellcheck="false" placeholder="导出的 JSON 参数会显示在这里，也可以粘贴后导入"></textarea>

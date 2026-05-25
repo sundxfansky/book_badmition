@@ -209,6 +209,13 @@ class BookingWebAppTest(unittest.TestCase):
         self.assertEqual(webapp._response_success_units(duplicate, successful_slot_keys), 0)
         self.assertEqual(webapp._response_success_units(next_time, successful_slot_keys), 1)
 
+    def test_fixed_courts_include_v1_v2(self) -> None:
+        app = BookingWebApp("request.txt")
+        court_names = [court["site_name"] for court in app.metadata("client-a")["snapshot"]["courts"]]
+
+        self.assertIn("6楼V1号场", court_names)
+        self.assertIn("6楼V2号场", court_names)
+
     def test_monitor_round_submits_released_slot(self) -> None:
         app = BookingWebApp("request.txt")
         state = app.state_for("client-a")
@@ -315,6 +322,8 @@ class BookingWebAppTest(unittest.TestCase):
                                 "end_time": "09:00",
                                 "price": "75",
                                 "disabled_desc": "已预约",
+                                "member_name": "张三",
+                                "mobile": "13800000000",
                             },
                         ],
                     }
@@ -337,6 +346,8 @@ class BookingWebAppTest(unittest.TestCase):
         self.assertEqual(response["snapshot"]["date"], "2026/05/28")
         self.assertTrue(response["snapshot"]["items"][0]["available"])
         self.assertFalse(response["snapshot"]["items"][1]["available"])
+        self.assertEqual(response["snapshot"]["items"][1]["member_name"], "张三")
+        self.assertEqual(response["snapshot"]["items"][1]["mobile"], "13800000000")
         self.assertNotIn("wx-token", response["request"]["headers"])
         self.assertEqual(app.admin_snapshot()["tasks"][0]["wx_token"], "token-a")
 

@@ -6,6 +6,7 @@ const state = {
   monitorCells: [],
   siteListSnapshot: null,
   siteStatusQueried: false,
+  reservedSnapshot: null,
   previewPinned: false,
   logs: [],
   requestCollapsed: false,
@@ -70,6 +71,7 @@ function applyParams(params, options = {}) {
   $("monitorEnabledInput").checked = params.monitor_enabled === true;
   $("monitorDateInput").value = params.monitor_date || params.date || "";
   $("monitorIntervalInput").value = params.monitor_interval_seconds ?? 20;
+  $("reservedDateInput").value = params.monitor_date || params.date || "";
   $("wxTokenInput").value = token;
   $("shopIdInput").value = params.headers?.["shop-id"] || "";
   $("brandCodeInput").value = params.headers?.["brand-code"] || "";
@@ -432,6 +434,94 @@ async function querySiteStatus() {
   await preview();
 }
 
+async function queryReservedStatus() {
+  const date = normalizeDate($("reservedDateInput").value) || state.selectedDates[0] || "";
+  if (!date) {
+    showNotice("请先输入要查询的日期");
+    return;
+  }
+  $("reservedDateInput").value = date;
+  $("reservedLookupSummary").textContent = `正在查询 ${date}...`;
+  state.previewPinned = false;
+  const params = { ...currentParams(), monitor_date: date };
+  const data = await api("/api/site-status", {
+    method: "POST",
+    body: JSON.stringify(params),
+  });
+  if (!data.success) {
+    $("reservedLookupSummary").textContent = `查询失败：${data.error || data.message || "未知错误"}`;
+    renderReservedTable([]);
+    if (data.request) {
+      $("requestView").textContent = JSON.stringify(data.request, null, 2);
+    }
+    return;
+  }
+  state.reservedSnapshot = data.snapshot;
+  const reservedRows = reservedItems(data.snapshot);
+  $("reservedLookupSummary").textContent = `${data.snapshot.date} 已预约 ${reservedRows.length} 个`;
+  if (data.request) {
+    $("requestView").textContent = JSON.stringify(data.request, null, 2);
+  }
+  renderReservedTable(reservedRows);
+}
+
+function reservedItems(snapshot) {
+  return (snapshot?.items || [])
+    .filter((item) => !item.available)
+    .sort((a, b) => {
+      const byCourt = courtOrder(a.court) - courtOrder(b.court);
+      if (byCourt) return byCourt;
+      return String(a.time_slot?.start_time || "").localeCompare(String(b.time_slot?.start_time || ""));
+    });
+}
+
+function courtOrder(court) {
+  const index = allCourts().findIndex((item) => String(item.site_id) === String(court?.site_id));
+  return index >= 0 ? index : Number.MAX_SAFE_INTEGER;
+}
+
+function renderReservedTable(items) {
+  const tbody = $("reservedTableBody");
+  tbody.innerHTML = "";
+  if (!items.length) {
+    const row = document.createElement("tr");
+    row.innerHTML = '<td colspan="6" class="empty-table">没有查询到被预约的场地。</td>';
+    tbody.appendChild(row);
+    return;
+  }
+  for (const item of items) {
+    const row = document.createElement("tr");
+    row.innerHTML = `
+      <td>${escapeHtml(state.reservedSnapshot?.date || "")}</td>
+      <td>${escapeHtml(item.court?.site_name || "-")}</td>
+      <td>${escapeHtml(item.time_slot?.start_time || "?")}-${escapeHtml(item.time_slot?.end_time || "?")}</td>
+      <td>${escapeHtml(reservedReason(item))}</td>
+      <td>${escapeHtml(item.member_name || "-")}</td>
+      <td>${escapeHtml(item.mobile || "-")}</td>
+    `;
+    tbody.appendChild(row);
+  }
+}
+
+function reservedReason(item) {
+  return item.disabled_desc || item.disabled_reason || statusText(item.status) || "已预约";
+}
+
+function statusText(status) {
+  if (String(status) === "1") return "不可预约";
+  if (String(status) === "0") return "未开放";
+  return "";
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
 async function exportParams() {
   const params = currentParams();
   delete params.headers["wx-token"];
@@ -613,6 +703,7 @@ async function boot() {
     $("scheduledStartInput").value = defaultScheduledStartValue();
   }
   $("newDateInput").value = state.snapshot.date;
+  $("reservedDateInput").value = $("reservedDateInput").value || state.snapshot.date;
   renderChoices();
   await preview();
   await refreshStatus();
@@ -643,6 +734,11 @@ $("querySiteStatusBtn").addEventListener("click", () => {
     $("siteStatusSummary").textContent = `查询失败：${error.message}`;
   });
 });
+$("queryReservedBtn").addEventListener("click", () => {
+  queryReservedStatus().catch((error) => {
+    $("reservedLookupSummary").textContent = `查询失败：${error.message}`;
+  });
+});
 $("toggleRequestBtn").addEventListener("click", toggleRequestPanel);
 $("clearLogsBtn").addEventListener("click", clearLogs);
 $("logSearchInput").addEventListener("input", renderLogs);
@@ -657,6 +753,9 @@ $("addDateBtn").addEventListener("click", () => {
   if (!$("monitorDateInput").value) {
     $("monitorDateInput").value = date;
   }
+  if (!$("reservedDateInput").value) {
+    $("reservedDateInput").value = date;
+  }
   renderChoices();
   preview();
 });
@@ -665,6 +764,9 @@ for (const id of ["intervalInput", "maxAttemptsInput", "dryRunInput", "verifySsl
   $(id).addEventListener("change", preview);
 }
 $("wxTokenInput").addEventListener("input", cacheWxToken);
+$("reservedDateInput").addEventListener("change", () => {
+  $("reservedDateInput").value = normalizeDate($("reservedDateInput").value);
+});
 $("monitorDateInput").addEventListener("change", () => {
   const date = normalizeDate($("monitorDateInput").value);
   $("monitorDateInput").value = date;
@@ -682,6 +784,9 @@ $("dateInput").addEventListener("change", () => {
     $("dateInput").value = state.selectedDates[0] || "";
     if (!$("monitorDateInput").value) {
       $("monitorDateInput").value = date;
+    }
+    if (!$("reservedDateInput").value) {
+      $("reservedDateInput").value = date;
     }
   }
   renderChoices();

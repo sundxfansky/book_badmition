@@ -321,6 +321,90 @@ textarea {
   line-height: 1.4;
 }
 
+.fold-panel {
+  margin-top: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.fold-panel summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 42px;
+  padding: 0 12px;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.fold-panel summary small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.fold-body {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border-top: 1px solid var(--line);
+  background: #f8fafc;
+}
+
+.reserved-actions {
+  align-items: center;
+}
+
+.reserved-actions input {
+  flex: 1 1 180px;
+  max-width: 240px;
+}
+
+.reserved-table-wrap {
+  max-height: 340px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+}
+
+.reserved-table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.reserved-table th,
+.reserved-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid #edf2f0;
+  text-align: left;
+  vertical-align: top;
+}
+
+.reserved-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #eef4f3;
+  color: var(--accent-strong);
+  font-weight: 800;
+}
+
+.reserved-table td {
+  overflow-wrap: anywhere;
+}
+
+.empty-table {
+  color: var(--muted);
+  text-align: center;
+}
+
 .date-add input {
   flex: 1 1 180px;
 }

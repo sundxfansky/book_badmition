@@ -6,6 +6,8 @@ FIXED_COURTS = [
     {"site_id": 3692729935134810, "site_name": "5号场"},
     {"site_id": 3692729935134811, "site_name": "6号场"},
     {"site_id": 3704542185717805, "site_name": "7号场"},
+    {"site_id": 3713773110689834, "site_name": "6楼V1号场"},
+    {"site_id": 3713764789190689, "site_name": "6楼V2号场"},
 ]
 
 FIXED_TIME_SLOTS = [
