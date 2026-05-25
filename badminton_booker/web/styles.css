@@ -238,10 +238,37 @@ textarea {
   text-align: center;
 }
 
+.schedule-cell small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.schedule-cell.occupied {
+  background: #fff7ed;
+  border-color: #fed7aa;
+}
+
+.schedule-cell.occupied small {
+  color: #c2410c;
+}
+
+.schedule-cell.available small {
+  color: #0f766e;
+}
+
 .schedule-cell.active {
   border-color: var(--accent);
   background: var(--soft);
   color: var(--accent-strong);
+}
+
+.schedule-cell.occupied.active {
+  border-color: #b42318;
+  background: #fff1f2;
+  color: #b42318;
 }
 
 .choice,
@@ -256,6 +283,12 @@ textarea {
 
 .date-add {
   margin-bottom: 8px;
+}
+
+.field-hint {
+  margin: -4px 0 10px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .date-add input {

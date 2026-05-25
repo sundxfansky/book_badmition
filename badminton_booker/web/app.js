@@ -3,6 +3,8 @@ const state = {
   params: null,
   selectedDates: [],
   selectedCells: [],
+  monitorCells: [],
+  siteListSnapshot: null,
   logs: [],
   requestCollapsed: false,
 };
@@ -39,6 +41,8 @@ function currentParams() {
     dates: state.selectedDates,
     request_mode: requestMode(),
     selections: state.selectedCells,
+    monitor_enabled: $("monitorEnabledInput").checked,
+    monitor_selections: state.monitorCells,
     headers: {
       "wx-token": $("wxTokenInput").value.trim(),
       "shop-id": $("shopIdInput").value.trim(),
@@ -59,6 +63,7 @@ function applyParams(params, options = {}) {
   $("verifySslInput").checked = params.verify_ssl === true;
   $("scheduleEnabledInput").checked = params.schedule_enabled === true;
   $("scheduledStartInput").value = toDatetimeLocalValue(params.scheduled_start_at || "");
+  $("monitorEnabledInput").checked = params.monitor_enabled === true;
   $("wxTokenInput").value = token;
   $("shopIdInput").value = params.headers?.["shop-id"] || "";
   $("brandCodeInput").value = params.headers?.["brand-code"] || "";
@@ -67,6 +72,7 @@ function applyParams(params, options = {}) {
 
   state.selectedDates = normalizeDates(params.dates || (params.date ? [params.date] : []));
   state.selectedCells = params.selections || defaultSelections(params);
+  state.monitorCells = params.monitor_selections || [];
 }
 
 function cacheWxToken() {
@@ -122,7 +128,8 @@ function renderChoices() {
 
 function renderSubtitle() {
   if (!state.snapshot) return;
-  $("subtitle").textContent = `${state.selectedDates.length} 个日期 · 已选 ${state.selectedCells.length} 个场地时间`;
+  const mode = $("monitorEnabledInput").checked ? `监听 ${state.monitorCells.length} 个已约场地时间` : `已选 ${state.selectedCells.length} 个场地时间`;
+  $("subtitle").textContent = `${state.selectedDates.length} 个日期 · ${mode}`;
 }
 
 function renderDates() {
@@ -146,6 +153,7 @@ function renderScheduleGrid() {
   const grid = $("scheduleGrid");
   const courts = allCourts();
   const times = allTimes();
+  const monitorMode = $("monitorEnabledInput").checked;
   grid.style.gridTemplateColumns = `112px repeat(${courts.length}, minmax(86px, 1fr))`;
   grid.innerHTML = "";
 
@@ -157,10 +165,19 @@ function renderScheduleGrid() {
   for (const timeSlot of times) {
     grid.appendChild(cell(`${timeSlot.start_time}-${timeSlot.end_time}`, "schedule-time"));
     for (const court of courts) {
+      const status = slotStatus(court, timeSlot);
+      const selected = monitorMode ? isMonitorCell(court, timeSlot) : isSelectedCell(court, timeSlot);
       const button = document.createElement("button");
-      button.className = `schedule-cell${isSelectedCell(court, timeSlot) ? " active" : ""}`;
-      button.innerHTML = `<span>${timeSlot.price} 元</span>`;
-      button.addEventListener("click", () => toggleCell(court, timeSlot));
+      button.className = `schedule-cell${selected ? " active" : ""}${status.available ? " available" : " occupied"}`;
+      button.innerHTML = `<span>${timeSlot.price} 元</span><small>${status.label}</small>`;
+      button.title = status.desc;
+      button.addEventListener("click", () => {
+        if (monitorMode) {
+          toggleMonitorCell(court, timeSlot);
+        } else {
+          toggleCell(court, timeSlot);
+        }
+      });
       grid.appendChild(button);
     }
   }
@@ -183,6 +200,16 @@ function toggleCell(court, timeSlot) {
   preview();
 }
 
+function toggleMonitorCell(court, timeSlot) {
+  if (isMonitorCell(court, timeSlot)) {
+    state.monitorCells = state.monitorCells.filter((item) => !sameCell(item, court, timeSlot));
+  } else {
+    state.monitorCells.push({ court, time_slot: timeSlot });
+  }
+  renderChoices();
+  preview();
+}
+
 function allCourts() {
   return state.snapshot?.courts || [];
 }
@@ -195,6 +222,10 @@ function isSelectedCell(court, timeSlot) {
   return state.selectedCells.some((item) => sameCell(item, court, timeSlot));
 }
 
+function isMonitorCell(court, timeSlot) {
+  return state.monitorCells.some((item) => sameCell(item, court, timeSlot));
+}
+
 function sameCell(item, court, timeSlot) {
   return String(item.court?.site_id) === String(court.site_id) && sameTime(item.time_slot, timeSlot);
 }
@@ -205,6 +236,21 @@ function sameTime(a, b) {
 
 function normalizeTimes(slots) {
   return Array.from(slots || []);
+}
+
+function slotStatus(court, timeSlot) {
+  const item = (state.siteListSnapshot?.items || []).find((entry) => sameCell(entry, court, timeSlot));
+  if (!item) {
+    return { available: true, label: "未知", desc: "抓包快照里没有这个状态" };
+  }
+  if (item.available) {
+    return { available: true, label: "可约", desc: "当前抓包快照显示可预约" };
+  }
+  return {
+    available: false,
+    label: "已约",
+    desc: item.disabled_desc || item.disabled_reason || item.member_name || "当前抓包快照显示不可预约",
+  };
 }
 
 function showNotice(message) {
@@ -463,6 +509,7 @@ async function refreshStatus() {
 async function boot() {
   const metadata = await api("/api/metadata");
   state.snapshot = metadata.snapshot;
+  state.siteListSnapshot = metadata.site_list_snapshot;
   applyParams(metadata.params);
   if (!$("scheduledStartInput").value) {
     $("scheduledStartInput").value = defaultScheduledStartValue();
@@ -482,6 +529,10 @@ $("exportBtn").addEventListener("click", exportParams);
 $("importBtn").addEventListener("click", importParams);
 $("singleModeInput").addEventListener("change", preview);
 $("pairModeInput").addEventListener("change", preview);
+$("monitorEnabledInput").addEventListener("change", () => {
+  renderChoices();
+  preview();
+});
 $("toggleRequestBtn").addEventListener("click", toggleRequestPanel);
 $("clearLogsBtn").addEventListener("click", clearLogs);
 $("logSearchInput").addEventListener("input", renderLogs);

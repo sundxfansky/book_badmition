@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, urlencode, unquote, urlparse, urlunparse
 
 from .venue_defaults import FIXED_COURTS, FIXED_SOURCE_DATE, FIXED_TIME_SLOTS
 
@@ -67,6 +67,34 @@ class CaptureStore:
             headers.pop(name, None)
         headers["content-type"] = "application/json"
         return headers
+
+    def site_list_entry(self) -> dict:
+        entry = self.latest_site_list_entry()
+        if not entry:
+            raise ValueError("No venues_site_list request found")
+        return entry
+
+    def site_list_headers(self) -> dict[str, str]:
+        headers = dict(self.site_list_entry().get("req", {}).get("headers", {}))
+        for name in ["host", "content-length", "accept-encoding"]:
+            headers.pop(name, None)
+        return headers
+
+    def build_site_list_request(self, params: dict, date: str) -> dict:
+        entry = self.site_list_entry()
+        headers = self.site_list_headers()
+        headers.update(params.get("headers") or {})
+
+        parsed = urlparse(str(entry.get("url") or ""))
+        query = parse_qs(parsed.query)
+        query["date"] = [date]
+        url = urlunparse(parsed._replace(query=urlencode(query, doseq=True)))
+        return {
+            "method": entry.get("req", {}).get("method", "GET"),
+            "url": url,
+            "headers": headers,
+            "body": None,
+        }
 
     def latest_site_list_entry(self) -> dict | None:
         site_entries = [
@@ -228,6 +256,40 @@ def snapshot_to_dict(snapshot: VenueSnapshot) -> dict:
         "fixed_courts": [court.__dict__ for court in snapshot.fixed_courts],
         "selected_times": [time.__dict__ for time in snapshot.selected_times],
     }
+
+
+def site_list_snapshot_to_dict(entry: dict | None) -> dict:
+    if not entry:
+        return {"date": "", "items": []}
+    parsed = urlparse(str(entry.get("path", "")))
+    date = parse_qs(parsed.query).get("date", [""])[0]
+    payload = decode_json_body(entry.get("res", {}))
+    data = payload.get("data", {}) if isinstance(payload, dict) else {}
+    items = []
+    for court in data.get("list", []):
+        court_info = {"site_id": court.get("site_id"), "site_name": court.get("site_name")}
+        for slot in court.get("site_data", []):
+            items.append(
+                {
+                    "court": court_info,
+                    "time_slot": {
+                        "start_time": str(slot.get("start_time", "")),
+                        "end_time": str(slot.get("end_time", "")),
+                        "start_timestamp": int(slot.get("start_timestamp", 0)),
+                        "end_timestamp": int(slot.get("end_timestamp", 0)),
+                        "price": str(slot.get("price", "0")),
+                        "times": str(slot.get("times", "1")),
+                        "source_date": date,
+                    },
+                    "status": slot.get("status"),
+                    "available": str(slot.get("status")) == "2" and str(slot.get("times", "0")) != "0",
+                    "disabled_desc": str(slot.get("disabled_desc", "")),
+                    "disabled_reason": str(slot.get("disabled_reason", "")),
+                    "member_name": str(slot.get("member_name", "")),
+                    "mobile": str(slot.get("mobile", "")),
+                }
+            )
+    return {"date": unquote(date), "items": items}
 
 
 def request_summary(request_data: dict) -> dict:

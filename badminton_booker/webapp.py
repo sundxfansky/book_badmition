@@ -15,7 +15,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 
-from .capture import CaptureStore, request_summary, snapshot_to_dict
+from .capture import CaptureStore, request_summary, site_list_snapshot_to_dict, snapshot_to_dict
 from .http_client import send_request
 
 
@@ -88,6 +88,7 @@ class BookingWebApp:
         snapshot = self.capture.venue_snapshot()
         return {
             "snapshot": snapshot_to_dict(snapshot),
+            "site_list_snapshot": site_list_snapshot_to_dict(self.capture.latest_site_list_entry()),
             "params": _without_wx_token(state.params),
         }
 
@@ -107,6 +108,32 @@ class BookingWebApp:
     def preview(self, client_id: str, params: dict | None = None) -> dict:
         state = self.state_for(client_id)
         effective = self._merged_params(state, params or {})
+        if effective.get("monitor_enabled"):
+            dates = _monitor_dates(effective)
+            status_requests = [
+                _safe_request_summary(self.capture.build_site_list_request(effective, date))
+                for date in dates
+            ]
+            submit_requests = [
+                _safe_request_summary(
+                    self.capture.build_submit_request(
+                        {
+                            **effective,
+                            "date": item["date"],
+                            "court": item["court"],
+                            "time_slots": [item["time_slot"]],
+                        }
+                    )
+                )
+                for item in _monitor_targets(effective)
+            ]
+            return {
+                "mode": "monitor",
+                "count": len(status_requests),
+                "requests": status_requests,
+                "monitor_targets": [_monitor_target_desc(item) for item in _monitor_targets(effective)],
+                "submit_requests_when_released": submit_requests,
+            }
         requests = self.capture.build_submit_requests(effective)
         return {
             "count": len(requests),
@@ -187,7 +214,7 @@ class BookingWebApp:
                         "updated_at": _format_timestamp(state.updated_at),
                         "date": params.get("date", ""),
                         "dates": params.get("dates", []),
-                        "selection_count": len(params.get("selections") or []),
+                        "selection_count": len(params.get("selections") or params.get("monitor_selections") or []),
                         "interval_seconds": params.get("interval_seconds"),
                         "max_attempts": params.get("max_attempts"),
                         "dry_run": params.get("dry_run"),
@@ -230,6 +257,9 @@ class BookingWebApp:
         try:
             if not self._wait_for_schedule(state, params):
                 return
+            if params.get("monitor_enabled"):
+                self._run_monitor_loop(state, params)
+                return
             while not state.stop_event.is_set():
                 attempt += 1
                 self.log(state, f"第 {attempt} 轮提交预约请求")
@@ -251,6 +281,110 @@ class BookingWebApp:
                 state.running = False
                 state.waiting_for_schedule = False
                 state.scheduled_start_at = ""
+
+    def _run_monitor_loop(self, state: RuntimeState, params: dict) -> None:
+        attempt = 0
+        successful_slot_keys: set[str] = set()
+        max_attempts = int(params.get("max_attempts") or 0)
+        interval = max(0.1, float(params.get("interval_seconds") or 0.1))
+        targets = _monitor_targets(params)
+        if not targets:
+            self.log(state, "监听下单未选择目标，请选择已经被预约的场地时间")
+            return
+
+        self.log(state, f"开始监听下单：{len(targets)} 个目标")
+        while not state.stop_event.is_set():
+            attempt += 1
+            self.log(state, f"第 {attempt} 轮监听场地释放")
+            response = self._send_monitor_round(state, params, targets, successful_slot_keys)
+            with state.lock:
+                state.last_response = response
+            if response.get("success"):
+                self.log(state, "监听下单任务结束")
+                break
+            if max_attempts and attempt >= max_attempts:
+                self.log(state, "达到最大监听次数，任务结束")
+                break
+            state.stop_event.wait(interval)
+
+    def _send_monitor_round(
+        self,
+        state: RuntimeState,
+        params: dict,
+        targets: list[dict],
+        successful_slot_keys: set[str],
+    ) -> dict:
+        released = []
+        status_responses = []
+        for date in _monitor_dates(params):
+            request_data = self.capture.build_site_list_request(params, date)
+            self.log(state, f"查询场地状态：{date}")
+            site_response = self._send_site_list_request(state, request_data, params)
+            site_response["target"] = date
+            site_response["request"] = _safe_request_summary(request_data)
+            status_responses.append(site_response)
+            if not site_response.get("success"):
+                self.log(state, f"查询场地状态失败：{date} {site_response.get('error') or site_response.get('message') or ''}")
+                continue
+            available = _available_monitor_targets(site_response.get("payload") or {}, targets, date)
+            for item in available:
+                key = _selection_key(item["date"], item["court"], item["time_slot"])
+                if key in successful_slot_keys:
+                    continue
+                released.append(item)
+
+        if not released:
+            self.log(state, "本轮没有监听目标释放")
+            return {"success": False, "released": [], "responses": status_responses}
+
+        self.log(state, f"发现 {len(released)} 个监听目标可预约，立即下单")
+        submit_params = {**params, "selections": [_selection_without_date(item) for item in released]}
+        submit_responses = []
+        success_units = 0
+        max_workers = min(len(released), 16)
+        executor = ThreadPoolExecutor(max_workers=max_workers)
+        futures = {}
+        try:
+            for index, item in enumerate(released, start=1):
+                request_data = self.capture.build_submit_request(
+                    {
+                        **submit_params,
+                        "date": item["date"],
+                        "court": item["court"],
+                        "time_slots": [item["time_slot"]],
+                    }
+                )
+                futures[executor.submit(self._send_request, state, request_data, params)] = (index, item, request_data)
+            pending = set(futures)
+            while pending:
+                done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                for future in sorted(done, key=lambda item: futures[item][0]):
+                    index, item, request_data = futures[future]
+                    response = future.result()
+                    response["index"] = index
+                    response["target"] = _request_target_desc(request_data)
+                    response["request"] = _safe_request_summary(request_data)
+                    submit_responses.append(response)
+                    status = "成功" if response.get("success") else "失败"
+                    self.log(state, f"监听下单第 {index} 个请求（{status}）：{response['target']}")
+                    if response.get("success"):
+                        self._notify_request_success(state, params, response, set())
+                    success_units += _response_success_units(response, successful_slot_keys)
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+        submit_responses.sort(key=lambda item: item.get("index", 0))
+        result = {
+            "success": success_units > 0,
+            "success_units": success_units,
+            "released": [_monitor_target_desc(item) for item in released],
+            "responses": submit_responses,
+            "status_responses": status_responses,
+            "success_targets": _successful_targets(submit_responses),
+        }
+        if result["success"]:
+            self._notify_success(state, params, result)
+        return result
 
     def _wait_for_schedule(self, state: RuntimeState, params: dict) -> bool:
         scheduled_ts = _scheduled_timestamp(params)
@@ -417,6 +551,32 @@ class BookingWebApp:
             return {"success": False, "raw": raw[:1000]}
         success = payload.get("code") == 0
         return {"success": success, "message": payload.get("msg", payload.get("code")), "payload": payload}
+
+    def _send_site_list_request(self, state: RuntimeState, request_data: dict, params: dict) -> dict:
+        with state.lock:
+            state.last_request = _safe_request_summary(request_data)
+
+        request = Request(
+            request_data["url"],
+            headers=request_data["headers"],
+            method=request_data["method"],
+        )
+        try:
+            raw, ssl_fallback = send_request(request, timeout=10, verify_ssl=params.get("verify_ssl", True))
+            if ssl_fallback:
+                self.log(state, "本机证书校验失败，已自动关闭 SSL 校验重试一次")
+        except HTTPError as exc:
+            self.log(state, f"HTTP 错误：{exc.code} {exc.reason}")
+            return {"success": False, "error": f"HTTP {exc.code}: {exc.reason}"}
+        except URLError as exc:
+            self.log(state, f"网络错误：{exc.reason}")
+            return {"success": False, "error": str(exc.reason)}
+
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return {"success": False, "raw": raw[:1000]}
+        return {"success": payload.get("code") == 0, "message": payload.get("msg", payload.get("code")), "payload": payload}
 
     def _merged_params(self, state: RuntimeState, params: dict) -> dict:
         merged = json.loads(json.dumps(state.params or self.default_params(), ensure_ascii=False))
@@ -603,6 +763,20 @@ def _single_success_notification_message(response: dict, dry_run: bool) -> str:
 
 
 def _params_booking_desc(params: dict) -> str:
+    monitor_selections = params.get("monitor_selections") or []
+    if params.get("monitor_enabled") and monitor_selections:
+        dates = params.get("dates") or ([params.get("date")] if params.get("date") else [])
+        targets = []
+        for date in dates:
+            for item in monitor_selections:
+                court = item.get("court") or {}
+                time_slot = item.get("time_slot") or {}
+                targets.append(
+                    f"{date} {court.get('site_name', '未知场地')} "
+                    f"{time_slot.get('start_time', '?')}-{time_slot.get('end_time', '?')}"
+                )
+        return "；".join(targets[:10]) + (" ..." if len(targets) > 10 else "")
+
     selections = params.get("selections") or []
     if selections:
         dates = params.get("dates") or ([params.get("date")] if params.get("date") else [])
@@ -637,6 +811,68 @@ def _successful_targets(responses: list[dict]) -> list[str]:
         if response.get("success") and response.get("target"):
             targets.append(str(response["target"]))
     return targets
+
+
+def _monitor_dates(params: dict) -> list[str]:
+    return params.get("dates") or ([params.get("date")] if params.get("date") else [])
+
+
+def _monitor_targets(params: dict) -> list[dict]:
+    targets = []
+    for date in _monitor_dates(params):
+        for item in params.get("monitor_selections") or []:
+            court = item.get("court") or {}
+            time_slot = item.get("time_slot") or {}
+            if court and time_slot:
+                targets.append({"date": date, "court": court, "time_slot": time_slot})
+    return targets
+
+
+def _available_monitor_targets(payload: dict, targets: list[dict], date: str) -> list[dict]:
+    data = payload.get("data", {}) if isinstance(payload, dict) else {}
+    available_keys = set()
+    for court_data in data.get("list", []):
+        court = {"site_id": court_data.get("site_id"), "site_name": court_data.get("site_name")}
+        for slot in court_data.get("site_data", []):
+            if _slot_is_available(slot):
+                available_keys.add(_selection_key(date, court, slot))
+
+    released = []
+    for item in targets:
+        if item.get("date") != date:
+            continue
+        key = _selection_key(date, item["court"], item["time_slot"])
+        if key in available_keys:
+            released.append(item)
+    return released
+
+
+def _slot_is_available(slot: dict) -> bool:
+    return str(slot.get("status")) == "2" and str(slot.get("times", "0")) != "0"
+
+
+def _selection_key(date: str, court: dict, time_slot: dict) -> str:
+    return "|".join(
+        [
+            str(date),
+            str(court.get("site_id", "")),
+            str(time_slot.get("start_time", "")),
+            str(time_slot.get("end_time", "")),
+        ]
+    )
+
+
+def _selection_without_date(item: dict) -> dict:
+    return {"court": item["court"], "time_slot": item["time_slot"]}
+
+
+def _monitor_target_desc(item: dict) -> str:
+    court = item.get("court") or {}
+    time_slot = item.get("time_slot") or {}
+    return (
+        f"{item.get('date', '')} {court.get('site_name', '未知场地')} "
+        f"{time_slot.get('start_time', '?')}-{time_slot.get('end_time', '?')}"
+    )
 
 
 def _response_targets_desc(response: dict) -> str:

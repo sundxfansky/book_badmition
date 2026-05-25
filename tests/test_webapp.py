@@ -209,6 +209,88 @@ class BookingWebAppTest(unittest.TestCase):
         self.assertEqual(webapp._response_success_units(duplicate, successful_slot_keys), 0)
         self.assertEqual(webapp._response_success_units(next_time, successful_slot_keys), 1)
 
+    def test_monitor_round_submits_released_slot(self) -> None:
+        app = BookingWebApp("request.txt")
+        state = app.state_for("client-a")
+        sent = []
+        params = {
+            "dry_run": True,
+            "headers": {},
+            "dates": ["2026/05/28"],
+            "monitor_selections": [
+                {
+                    "court": {"site_id": 3692729935134806, "site_name": "1号场"},
+                    "time_slot": {
+                        "start_time": "09:00",
+                        "end_time": "10:00",
+                        "start_timestamp": 1779930000,
+                        "end_timestamp": 1779933600,
+                        "price": "75",
+                        "times": "1",
+                    },
+                }
+            ],
+        }
+
+        payload = {
+            "code": 0,
+            "data": {
+                "list": [
+                    {
+                        "site_id": 3692729935134806,
+                        "site_name": "1号场",
+                        "site_data": [
+                            {
+                                "status": 2,
+                                "times": "1",
+                                "start_time": "09:00",
+                                "end_time": "10:00",
+                            }
+                        ],
+                    }
+                ]
+            },
+        }
+
+        with patch.object(app, "_send_site_list_request", return_value={"success": True, "payload": payload}):
+            with patch.object(app, "_send_request", side_effect=lambda *args: {"success": True, "payload": {"code": 0}}):
+                with patch.object(app, "notify", side_effect=lambda _state, message, sync=False: sent.append(message)):
+                    response = app._send_monitor_round(state, params, webapp._monitor_targets(params), set())
+
+        self.assertTrue(response["success"])
+        self.assertEqual(response["success_units"], 1)
+        self.assertEqual(response["success_targets"], ["2026/05/28 1号场 09:00-10:00"])
+        self.assertTrue(any("监听下单第 1 个请求（成功）" in line for line in state.logs))
+        self.assertTrue(any("【羽毛球抢票】dry-run 单个请求成功" in item for item in sent))
+
+    def test_monitor_preview_shows_site_list_and_submit_requests(self) -> None:
+        app = BookingWebApp("request.txt")
+        preview = app.preview(
+            "client-a",
+            {
+                "monitor_enabled": True,
+                "dates": ["2026/05/28"],
+                "monitor_selections": [
+                    {
+                        "court": {"site_id": 3692729935134806, "site_name": "1号场"},
+                        "time_slot": {
+                            "start_time": "09:00",
+                            "end_time": "10:00",
+                            "start_timestamp": 1779930000,
+                            "end_timestamp": 1779933600,
+                            "price": "75",
+                            "times": "1",
+                        },
+                    }
+                ],
+            },
+        )
+
+        self.assertEqual(preview["mode"], "monitor")
+        self.assertIn("venues_site_list", preview["requests"][0]["url"])
+        self.assertEqual(preview["monitor_targets"], ["2026/05/28 1号场 09:00-10:00"])
+        self.assertEqual(len(preview["submit_requests_when_released"]), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

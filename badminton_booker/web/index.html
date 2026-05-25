@@ -64,6 +64,10 @@
             <input id="pairModeInput" type="radio" name="requestMode" value="pair" />
             同场相邻两小时一起请求
           </label>
+          <label class="check">
+            <input id="monitorEnabledInput" type="checkbox" />
+            监听已约场地释放后下单
+          </label>
         </div>
 
         <h3>日期</h3>
@@ -90,6 +94,7 @@
         </div>
 
         <h3>场地时间</h3>
+        <p class="field-hint">开启监听后，请选择显示为“已约”的场地时间；系统会轮询场地状态，释放后立即下单。</p>
         <div id="scheduleGrid" class="schedule-grid"></div>
 
         <h3>导入 / 导出</h3>
