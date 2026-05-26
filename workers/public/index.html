@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>羽毛球抢票控制台</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>羽毛球抢票控制台</h1>
+        <p id="subtitle">加载中...</p>
+      </div>
+      <div class="actions">
+        <button id="previewBtn">预览请求</button>
+        <button id="saveBtn">保存参数</button>
+        <button id="startBtn" class="primary">开始</button>
+        <button id="stopBtn" class="danger">停止</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel controls">
+        <h2>抢票参数</h2>
+        <div class="grid two">
+          <label>
+            日期
+            <input id="dateInput" type="text" placeholder="2026/05/28" />
+          </label>
+          <label>
+            轮询间隔秒
+            <input id="intervalInput" type="number" min="0.1" step="0.1" value="0.1" />
+          </label>
+          <label>
+            最大尝试次数
+            <input id="maxAttemptsInput" type="number" min="0" value="100000" />
+          </label>
+          <label class="check">
+            <input id="dryRunInput" type="checkbox" />
+            dry-run
+          </label>
+          <label class="check">
+            <input id="verifySslInput" type="checkbox" />
+            SSL 校验
+          </label>
+          <label class="check">
+            <input id="scheduleEnabledInput" type="checkbox" />
+            定时启动
+          </label>
+          <label>
+            启动时间
+            <input id="scheduledStartInput" type="datetime-local" step="1" />
+          </label>
+        </div>
+
+        <h3>请求方式</h3>
+        <div class="row">
+          <label class="check">
+            <input id="singleModeInput" type="radio" name="requestMode" value="single" checked />
+            单个时间分开请求
+          </label>
+          <label class="check">
+            <input id="pairModeInput" type="radio" name="requestMode" value="pair" />
+            同场相邻两小时一起请求
+          </label>
+        </div>
+
+        <h3>日期</h3>
+        <div class="row date-add">
+          <input id="newDateInput" type="text" placeholder="2026/05/29" />
+          <button id="addDateBtn">添加日期</button>
+        </div>
+        <div id="dateList" class="choice-grid"></div>
+
+        <h3>请求参数</h3>
+        <div class="grid two">
+          <label>
+            wx-token
+            <input id="wxTokenInput" type="password" autocomplete="off" />
+          </label>
+          <label>
+            shop-id
+            <input id="shopIdInput" type="text" />
+          </label>
+          <label>
+            brand-code
+            <input id="brandCodeInput" type="text" />
+          </label>
+        </div>
+
+        <h3>监听场地下单</h3>
+        <div class="monitor-panel">
+          <label class="check monitor-switch">
+            <input id="monitorEnabledInput" type="checkbox" />
+            开启监听场地下单
+          </label>
+          <div class="grid two">
+            <label>
+              监听日期
+              <input id="monitorDateInput" type="text" placeholder="2026/05/28" />
+            </label>
+            <label>
+              监听间隔秒
+              <input id="monitorIntervalInput" type="number" min="1" step="1" value="20" />
+            </label>
+          </div>
+          <div class="row monitor-actions">
+            <button id="querySiteStatusBtn" type="button">查询当前场地预约情况</button>
+            <span id="siteStatusSummary" class="status-text">开启监听后，先选择日期再查询。</span>
+          </div>
+        </div>
+
+        <h3>场地时间</h3>
+        <p class="field-hint">普通抢票可直接选择可预约目标；监听模式需要先查询实时状态，只能选择“已约”的场地时间。</p>
+        <div id="scheduleGrid" class="schedule-grid"></div>
+
+        <details id="reservedLookupPanel" class="fold-panel">
+          <summary>
+            <span>查询被预约场地</span>
+            <small id="reservedLookupSummary">未查询</small>
+          </summary>
+          <div class="fold-body">
+            <div class="row reserved-actions">
+              <input id="reservedDateInput" type="text" placeholder="2026/05/28" />
+              <button id="queryReservedBtn" type="button">查询被预约场地</button>
+            </div>
+            <div class="reserved-table-wrap">
+              <table class="reserved-table">
+                <thead>
+                  <tr>
+                    <th>日期</th>
+                    <th>场地</th>
+                    <th>时间</th>
+                    <th>原因</th>
+                    <th>预订人</th>
+                    <th>手机号</th>
+                  </tr>
+                </thead>
+                <tbody id="reservedTableBody">
+                  <tr>
+                    <td colspan="6" class="empty-table">输入日期后查询。</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </details>
+
+        <h3>导入 / 导出</h3>
+        <div class="import-export">
+          <textarea id="jsonBox" spellcheck="false" placeholder="导出的 JSON 参数会显示在这里，也可以粘贴后导入"></textarea>
+          <div class="row">
+            <button id="exportBtn">导出参数</button>
+            <button id="importBtn">导入参数</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel request-panel">
+        <div class="panel-head">
+          <h2>当前请求</h2>
+          <div class="request-actions">
+            <span id="runState" class="badge">未知</span>
+            <button id="toggleRequestBtn" type="button" class="icon-button" aria-expanded="true" aria-controls="requestView">收起</button>
+          </div>
+        </div>
+        <pre id="requestView">{}</pre>
+      </section>
+
+      <section class="panel log-panel">
+        <div id="logResizeHandle" class="log-resize-handle" title="向上拖动放大日志区域"></div>
+        <div class="panel-head">
+          <h2>日志</h2>
+        </div>
+        <div class="log-toolbar">
+          <input id="logSearchInput" class="log-search" type="search" placeholder="搜索日志" />
+          <select id="logFilterInput" aria-label="日志筛选">
+            <option value="all">全部</option>
+            <option value="success">只看成功</option>
+            <option value="failure">只看失败</option>
+            <option value="request">只看请求</option>
+            <option value="network">只看网络/HTTP</option>
+          </select>
+          <label class="font-tool">
+            字号
+            <input id="logFontInput" type="range" min="9" max="16" value="11" />
+            <span id="logFontValue">11</span>
+          </label>
+          <label class="toolbar-check">
+            <input id="autoScrollInput" type="checkbox" checked />
+            自动滚动
+          </label>
+          <button id="clearLogsBtn" class="danger" type="button">清除日志</button>
+        </div>
+        <div class="log-stack">
+          <div id="successLogView" class="success-log-view" aria-label="成功日志"></div>
+          <div id="logView" class="log-view" aria-label="普通日志"></div>
+        </div>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

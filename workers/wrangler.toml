@@ -1,0 +1,28 @@
+name = "badminton-booker"
+main = "src/index.ts"
+compatibility_date = "2025-05-01"
+
+assets = { directory = "./public" }
+
+[vars]
+WECHAT_BOT_WEBHOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=YOUR_KEY_HERE"
+
+[[kv_namespaces]]
+binding = "REQUEST_STORE"
+id = "REPLACE_WITH_KV_ID"
+
+[[kv_namespaces]]
+binding = "ADMIN_KV"
+id = "REPLACE_WITH_KV_ID"
+
+[[durable_objects.bindings]]
+name = "BOOKING_CLIENT"
+class_name = "BookingClientDO"
+
+[[durable_objects.bindings]]
+name = "ADMIN_AUTH"
+class_name = "AdminAuthDO"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["BookingClientDO", "AdminAuthDO"]
