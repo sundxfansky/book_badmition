@@ -56,6 +56,8 @@ class BookingWebApp:
         self.states: dict[str, RuntimeState] = {}
         self.states_lock = threading.Lock()
         self.admin = AdminAuth(ADMIN_CONFIG_PATH)
+        self.backends: list[dict] = self._load_backends()
+        self._backend_clients: dict[str, BackendClient] = {}
 
     def state_for(self, client_id: str) -> RuntimeState:
         key = client_id.strip() or "default"
@@ -322,6 +324,121 @@ class BookingWebApp:
                 self.admin_stop(client_id)
             return f"已导入并停止任务：{', '.join(imported)}"
         return f"已导入任务：{', '.join(imported)}"
+
+    def _load_backends(self) -> list[dict]:
+        try:
+            data = json.loads(ADMIN_CONFIG_PATH.read_text(encoding="utf-8"))
+            return data.get("backends") or []
+        except (FileNotFoundError, json.JSONDecodeError):
+            return []
+
+    def _save_backends(self) -> None:
+        try:
+            data = json.loads(ADMIN_CONFIG_PATH.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError):
+            data = {}
+        data["backends"] = self.backends
+        ADMIN_CONFIG_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _get_backend_client(self, backend_id: str) -> BackendClient | None:
+        if backend_id in self._backend_clients:
+            return self._backend_clients[backend_id]
+        for b in self.backends:
+            if b.get("id") == backend_id:
+                client = BackendClient(b)
+                self._backend_clients[backend_id] = client
+                return client
+        return None
+
+    def admin_add_backend(self, name: str, url: str, password: str) -> dict:
+        url = url.strip().rstrip("/")
+        name = name.strip()
+        if not url or not password:
+            return {"error": "地址和密码不能为空"}
+        backend_id = hashlib.md5(url.encode()).hexdigest()[:8]
+        for b in self.backends:
+            if b.get("id") == backend_id:
+                return {"error": "该节点已存在"}
+        backend = {"id": backend_id, "name": name or url, "url": url, "password": password}
+        self.backends.append(backend)
+        self._save_backends()
+        return {"success": True, "id": backend_id}
+
+    def admin_remove_backend(self, backend_id: str) -> dict:
+        self.backends = [b for b in self.backends if b.get("id") != backend_id]
+        self._backend_clients.pop(backend_id, None)
+        self._save_backends()
+        return {"success": True}
+
+    def admin_test_backend(self, backend_id: str) -> dict:
+        client = self._get_backend_client(backend_id)
+        if not client:
+            return {"error": "节点不存在"}
+        if client.login():
+            snapshot = client.snapshot()
+            if snapshot:
+                task_count = len(snapshot.get("tasks") or [])
+                return {"success": True, "message": f"连接成功，{task_count} 个任务"}
+            return {"error": "登录成功但获取数据失败"}
+        return {"error": "连接失败或密码错误"}
+
+    def admin_full_snapshot(self) -> dict:
+        local = self.admin_snapshot()
+        local["backend_id"] = "local"
+        local["backend_name"] = "本地"
+        remotes = []
+        futures_map = {}
+        with ThreadPoolExecutor(max_workers=max(1, len(self.backends))) as executor:
+            for backend in self.backends:
+                client = self._get_backend_client(backend["id"])
+                if client:
+                    future = executor.submit(client.snapshot)
+                    futures_map[future] = backend
+            for future in futures_map:
+                backend = futures_map[future]
+                try:
+                    snapshot = future.result(timeout=5)
+                    if snapshot:
+                        snapshot["backend_id"] = backend["id"]
+                        snapshot["backend_name"] = backend.get("name", backend["url"])
+                        remotes.append(snapshot)
+                    else:
+                        remotes.append({
+                            "backend_id": backend["id"],
+                            "backend_name": backend.get("name", backend["url"]),
+                            "error": "连接失败",
+                            "tasks": [],
+                        })
+                except Exception:
+                    remotes.append({
+                        "backend_id": backend["id"],
+                        "backend_name": backend.get("name", backend["url"]),
+                        "error": "连接超时",
+                        "tasks": [],
+                    })
+        return {"local": local, "remotes": remotes, "backends": self.backends}
+
+    def admin_sync_task(self, source_backend: str, source_client_id: str, target_backend: str) -> dict:
+        if source_backend == "local":
+            export_data = self.admin_task_export(source_client_id)
+        else:
+            client = self._get_backend_client(source_backend)
+            if not client:
+                return {"error": "源节点不存在"}
+            export_data = client.export(source_client_id)
+            if not export_data:
+                return {"error": "从源节点导出失败"}
+
+        if target_backend == "local":
+            result = self.admin_import(json.dumps(export_data, ensure_ascii=False))
+        else:
+            client = self._get_backend_client(target_backend)
+            if not client:
+                return {"error": "目标节点不存在"}
+            result = client.import_tasks(export_data)
+            if not result:
+                return {"error": "导入到目标节点失败"}
+        return result
 
     def _state_by_id(self, client_id: str) -> RuntimeState | None:
         key = client_id.strip() or "default"
@@ -739,6 +856,106 @@ class BookingWebApp:
         if state.wx_token and not (merged.get("headers") or {}).get("wx-token"):
             merged.setdefault("headers", {})["wx-token"] = state.wx_token
         return merged
+
+
+class BackendClient:
+    def __init__(self, backend: dict) -> None:
+        self.url = backend["url"].rstrip("/")
+        self.password = backend["password"]
+        self.name = backend.get("name", self.url)
+        self.backend_id = backend.get("id", "")
+        self._session_cookie: str = ""
+
+    def login(self) -> bool:
+        body = json.dumps({"password": self.password}).encode("utf-8")
+        req = Request(
+            f"{self.url}{ADMIN_PATH}/api/login",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            resp = urlopen(req, timeout=5)
+            for header_line in resp.headers.get_all("set-cookie") or []:
+                for part in header_line.split(";"):
+                    part = part.strip()
+                    if part.startswith(f"{ADMIN_COOKIE_NAME}="):
+                        self._session_cookie = part.split("=", 1)[1]
+                        return True
+            data = json.loads(resp.read().decode("utf-8"))
+            if data.get("session"):
+                self._session_cookie = data["session"]
+                return True
+        except (HTTPError, URLError, OSError, json.JSONDecodeError):
+            pass
+        return False
+
+    def snapshot(self) -> dict | None:
+        return self._get(f"{ADMIN_PATH}/api/snapshot")
+
+    def start(self, client_id: str) -> dict | None:
+        return self._post(f"{ADMIN_PATH}/api/start", {"client_id": client_id})
+
+    def stop(self, client_id: str) -> dict | None:
+        return self._post(f"{ADMIN_PATH}/api/stop", {"client_id": client_id})
+
+    def import_tasks(self, payload: dict) -> dict | None:
+        return self._post(f"{ADMIN_PATH}/api/import", payload)
+
+    def export(self, client_id: str = "__all__") -> dict | None:
+        return self._post(f"{ADMIN_PATH}/api/export", {"client_id": client_id})
+
+    def _get(self, path: str) -> dict | None:
+        if not self._session_cookie and not self.login():
+            return None
+        req = Request(
+            f"{self.url}{path}",
+            headers={"Cookie": f"{ADMIN_COOKIE_NAME}={self._session_cookie}"},
+            method="GET",
+        )
+        try:
+            resp = urlopen(req, timeout=5)
+            return json.loads(resp.read().decode("utf-8"))
+        except HTTPError as exc:
+            if exc.code in (401, 403) and self.login():
+                req.add_header("Cookie", f"{ADMIN_COOKIE_NAME}={self._session_cookie}")
+                try:
+                    resp = urlopen(req, timeout=5)
+                    return json.loads(resp.read().decode("utf-8"))
+                except (HTTPError, URLError, OSError):
+                    pass
+        except (URLError, OSError, json.JSONDecodeError):
+            pass
+        return None
+
+    def _post(self, path: str, payload: dict) -> dict | None:
+        if not self._session_cookie and not self.login():
+            return None
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        req = Request(
+            f"{self.url}{path}",
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "Cookie": f"{ADMIN_COOKIE_NAME}={self._session_cookie}",
+            },
+            method="POST",
+        )
+        try:
+            resp = urlopen(req, timeout=5)
+            return json.loads(resp.read().decode("utf-8"))
+        except HTTPError as exc:
+            if exc.code in (401, 403) and self.login():
+                req.remove_header("Cookie")
+                req.add_header("Cookie", f"{ADMIN_COOKIE_NAME}={self._session_cookie}")
+                try:
+                    resp = urlopen(req, timeout=5)
+                    return json.loads(resp.read().decode("utf-8"))
+                except (HTTPError, URLError, OSError):
+                    pass
+        except (URLError, OSError, json.JSONDecodeError):
+            pass
+        return None
 
 
 class AdminAuth:
@@ -1317,13 +1534,47 @@ def _admin_page(app: BookingWebApp, authenticated: bool, message: str = "") -> s
 </body>
 </html>"""
 
-    admin_snapshot = app.admin_snapshot()
+    full_snapshot = app.admin_full_snapshot()
     venue_snapshot = app.capture.venue_snapshot()
-    task_cards = [
-        _admin_task_card(task, venue_snapshot)
-        for task in admin_snapshot["tasks"]
+    all_backends = app.backends
+
+    local_tasks = full_snapshot["local"].get("tasks") or []
+    local_cards = [
+        _admin_task_card(task, venue_snapshot, all_backends, "local")
+        for task in local_tasks
     ]
-    body = "\n".join(task_cards) or "<section class=\"empty-card\">暂无任务。打开前台页面保存一次参数，或在上方导入任务 JSON。</section>"
+    local_body = "\n".join(local_cards) or '<p class="empty-hint">暂无本地任务</p>'
+
+    remote_sections = ""
+    for remote in full_snapshot.get("remotes") or []:
+        bid = remote.get("backend_id", "")
+        bname = escape(remote.get("backend_name", bid))
+        if remote.get("error"):
+            remote_sections += f'<h3 class="backend-group-title">{bname} <span class="backend-error">({escape(remote["error"])})</span></h3>'
+            continue
+        remote_task_cards = [
+            _admin_task_card(task, venue_snapshot, all_backends, bid)
+            for task in remote.get("tasks") or []
+        ]
+        remote_body = "\n".join(remote_task_cards) or f'<p class="empty-hint">{bname} 暂无任务</p>'
+        remote_sections += f'<h3 class="backend-group-title">{bname}</h3>\n{remote_body}'
+
+    backends_list_html = ""
+    for b in all_backends:
+        backends_list_html += f"""
+        <div class="backend-item">
+          <span class="backend-name">{escape(b.get('name', ''))}</span>
+          <span class="backend-url">{escape(b.get('url', ''))}</span>
+          <form method="post" action="{ADMIN_PATH}/backend/test" class="inline-form">
+            <input type="hidden" name="backend_id" value="{escape(b.get('id', ''))}" />
+            <button type="submit" class="link-button">测试</button>
+          </form>
+          <form method="post" action="{ADMIN_PATH}/backend/remove" class="inline-form">
+            <input type="hidden" name="backend_id" value="{escape(b.get('id', ''))}" />
+            <button type="submit" class="danger">删除</button>
+          </form>
+        </div>"""
+
     notice_html = f'<div class="notice">{escape(message)}</div>' if message else ""
     return f"""<!doctype html>
 <html lang="zh-CN">
@@ -1338,7 +1589,7 @@ def _admin_page(app: BookingWebApp, authenticated: bool, message: str = "") -> s
     <header>
       <div>
         <h1>后端管理</h1>
-        <p>导入导出任务，查看和修改 wx-token、日期、场地时间与运行参数。</p>
+        <p>管理多个后端节点，导入导出任务，查看和修改运行参数。</p>
       </div>
       <nav>
         <a href="{ADMIN_PATH}">刷新</a>
@@ -1349,10 +1600,25 @@ def _admin_page(app: BookingWebApp, authenticated: bool, message: str = "") -> s
       </nav>
     </header>
     {notice_html}
+    <section class="backends-panel">
+      <div class="backends-header">
+        <h2>远程节点</h2>
+        <p>添加其他后端实例，统一管理所有节点的任务。</p>
+      </div>
+      <div class="backends-body">
+        <div class="backend-list">{backends_list_html or '<p class="empty-hint">暂未添加远程节点</p>'}</div>
+        <form method="post" action="{ADMIN_PATH}/backend/add" class="backend-add-form">
+          <input name="name" placeholder="节点名称" />
+          <input name="url" placeholder="https://host:port" required />
+          <input name="password" type="password" placeholder="管理密码" required />
+          <button type="submit">添加节点</button>
+        </form>
+      </div>
+    </section>
     <section class="import-panel">
       <div>
         <h2>导入任务</h2>
-        <p>粘贴单个任务参数、单任务导出 JSON，或“导出全部”的 JSON。可填写客户端 ID 覆盖导入目标。</p>
+        <p>粘贴单个任务参数、单任务导出 JSON，或"导出全部"的 JSON。可填写客户端 ID 覆盖导入目标。</p>
       </div>
       <form method="post" action="{ADMIN_PATH}/import">
         <label>目标客户端 ID（可选）<input name="client_id" placeholder="例如 default 或 mobile-a" /></label>
@@ -1365,17 +1631,22 @@ def _admin_page(app: BookingWebApp, authenticated: bool, message: str = "") -> s
         <button type="submit">导入任务</button>
       </form>
     </section>
-    <section class="task-list">{body}</section>
+    <section class="task-list">
+      <h3 class="backend-group-title">本地</h3>
+      {local_body}
+      {remote_sections}
+    </section>
   </main>
 </body>
 </html>"""
 
 
-def _admin_task_card(task: dict, snapshot) -> str:
+def _admin_task_card(task: dict, snapshot, backends: list[dict] | None = None, backend_id: str = "local") -> str:
     params = task.get("params") or {}
     task_name = _admin_task_name(params)
+    is_active = task["running"] or task["waiting_for_schedule"]
     status = "等待定时" if task["waiting_for_schedule"] else "运行中" if task["running"] else "已停止"
-    status_class = "running" if task["running"] else "waiting" if task["waiting_for_schedule"] else ""
+    status_class = "running" if task["running"] else "waiting" if task["waiting_for_schedule"] else "stopped"
     dates = ", ".join(str(item) for item in params.get("dates") or ([params.get("date")] if params.get("date") else []))
     headers = params.get("headers") or {}
     selections = params.get("monitor_selections") if params.get("monitor_enabled") else params.get("selections")
@@ -1390,8 +1661,28 @@ def _admin_task_card(task: dict, snapshot) -> str:
     export_json = escape(json.dumps(export_payload, ensure_ascii=False, indent=2))
     grid_html = _admin_selection_grid(snapshot, selected_keys)
     mode = str(params.get("request_mode") or "single")
+    open_attr = "open" if is_active else ""
+    stopped_class = " task-stopped" if not is_active else ""
+    is_remote = backend_id != "local"
+    action_prefix = f"{ADMIN_PATH}/remote" if is_remote else ADMIN_PATH
+    backend_field = f'<input type="hidden" name="backend_id" value="{escape(backend_id)}" />' if is_remote else ""
+    sync_options = ""
+    all_backends = backends or []
+    for b in all_backends:
+        if b.get("id") != backend_id:
+            sync_options += f'<option value="{escape(b["id"])}">{escape(b.get("name", b["url"]))}</option>'
+    if backend_id != "local":
+        sync_options = f'<option value="local">本地</option>' + sync_options
+    sync_html = ""
+    if sync_options:
+        sync_html = f"""
+        <select name="sync_target" class="sync-select">
+          <option value="">同步到...</option>
+          {sync_options}
+        </select>
+        <button type="submit" formaction="{ADMIN_PATH}/remote/sync" class="secondary">同步</button>"""
     return f"""
-<details class="task-card">
+<details class="task-card{stopped_class}" {open_attr}>
   <summary class="task-head">
     <div>
       <h2>{escape(task_name)}</h2>
@@ -1407,8 +1698,9 @@ def _admin_task_card(task: dict, snapshot) -> str:
       <summary>查看 / 复制导出 JSON</summary>
       <pre>{export_json}</pre>
     </details>
-    <form method="post" action="{ADMIN_PATH}/update" class="task-form">
+    <form method="post" action="{action_prefix}/update" class="task-form">
       <input type="hidden" name="client_id" value="{escape(task['client_id'])}" />
+      {backend_field}
       <div class="form-grid">
         <label>wx-token
           <input name="wx_token" value="{escape(task.get('wx_token') or '')}" autocomplete="off" />
@@ -1449,9 +1741,9 @@ def _admin_task_card(task: dict, snapshot) -> str:
       </div>
       <div class="task-actions">
         <button type="submit">保存修改</button>
-        <button type="submit" formaction="{ADMIN_PATH}/start" class="primary" {'disabled' if task['running'] else ''}>开启任务</button>
-        <button type="submit" formaction="{ADMIN_PATH}/stop" class="danger" {'disabled' if not task['running'] else ''}>停止任务</button>
-        <button type="submit" formaction="{ADMIN_PATH}/export" formtarget="_blank" class="secondary">导出此任务</button>
+        <button type="submit" formaction="{action_prefix}/start" class="primary" {'disabled' if task['running'] else ''}>开启任务</button>
+        <button type="submit" formaction="{action_prefix}/stop" class="danger" {'disabled' if not task['running'] else ''}>停止任务</button>
+        <button type="submit" formaction="{ADMIN_PATH}/export" formtarget="_blank" class="secondary">导出此任务</button>{sync_html}
       </div>
     </form>
     <p class="last-log">最后日志：{escape(str(task.get('last_log') or '-'))}</p>
@@ -1522,6 +1814,10 @@ header form { margin: 0; }
 .pill { display: inline-block; white-space: nowrap; padding: 4px 10px; border-radius: 999px; background: #eef4f3; color: #42514d; font-size: 12px; font-weight: 750; }
 .pill.running { background: #dcfce7; color: #047857; }
 .pill.waiting { background: #fef9c3; color: #854d0e; }
+.pill.stopped { background: #eef4f3; color: #8a9a96; }
+.task-card.task-stopped { opacity: 0.55; transition: opacity 0.2s; }
+.task-card.task-stopped:hover { opacity: 0.85; }
+.task-card.task-stopped .task-head { background: #f6f8f9; }
 .collapse-toggle { display: inline-flex; align-items: center; justify-content: center; min-width: 54px; min-height: 28px; border: 1px solid #b9d7d1; border-radius: 6px; background: #fff; color: #0f766e; font-size: 12px; font-weight: 800; }
 .show-close { display: none; }
 .task-card[open] .show-open { display: none; }
@@ -1547,12 +1843,27 @@ label input { width: 100%; }
 .grid-time { position: sticky; left: 8px; z-index: 1; background: #fff; color: #5f6f6a; font-weight: 750; }
 .grid-choice { display: flex; align-items: center; justify-content: center; gap: 5px; color: #17211f; }
 .grid-choice:has(input:checked) { border-color: #0f766e; background: #eef4f3; color: #0f766e; font-weight: 800; }
-.task-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.task-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.sync-select { min-height: 34px; padding: 0 8px; border-radius: 6px; border: 1px solid #ccd8d5; font-size: 13px; background: #fff; }
 .last-log { margin-top: 2px; padding: 9px 10px; border-radius: 6px; background: #f8fafc; font-size: 12px; overflow-wrap: anywhere; }
-.empty-card { color: #5f6f6a; text-align: center; }
+.empty-card, .empty-hint { color: #5f6f6a; text-align: center; padding: 12px; }
+.backends-panel { margin-bottom: 16px; padding: 16px; background: #fff; border: 1px solid #dce5e2; border-radius: 8px; }
+.backends-header { margin-bottom: 12px; }
+.backends-body { display: grid; gap: 10px; }
+.backend-list { display: grid; gap: 8px; }
+.backend-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid #edf2f0; border-radius: 6px; background: #f8fafc; }
+.backend-name { font-weight: 700; color: #17211f; }
+.backend-url { color: #5f6f6a; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; flex: 1; }
+.backend-error { color: #b42318; font-size: 12px; font-weight: 400; }
+.inline-form { margin: 0; }
+.backend-add-form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.backend-add-form input { flex: 1; min-width: 120px; }
+.backend-group-title { margin: 16px 0 8px; padding: 6px 0; font-size: 14px; font-weight: 800; color: #0f766e; border-bottom: 1px solid #edf2f0; }
+.backend-group-title:first-child { margin-top: 0; }
 @media (max-width: 920px) {
   .import-panel, .form-grid { grid-template-columns: 1fr; }
   header { align-items: flex-start; flex-direction: column; }
+  .backend-add-form { flex-direction: column; }
 }
 """
 
@@ -1562,6 +1873,12 @@ def create_handler(app: BookingWebApp) -> type[BaseHTTPRequestHandler]:
         def do_GET(self) -> None:
             path = urlparse(self.path).path
             client_id = self._client_id()
+            if path == f"{ADMIN_PATH}/api/snapshot":
+                if not self._is_admin():
+                    self._json_error(401, "unauthorized")
+                    return
+                self._json(app.admin_snapshot())
+                return
             if path == ADMIN_PATH:
                 self._html(_admin_page(app, self._is_admin()))
             elif path == "/":
@@ -1582,6 +1899,52 @@ def create_handler(app: BookingWebApp) -> type[BaseHTTPRequestHandler]:
         def do_POST(self) -> None:
             path = urlparse(self.path).path
             client_id = self._client_id()
+            if path == f"{ADMIN_PATH}/api/login":
+                payload = self._read_json()
+                password = str(payload.get("password", ""))
+                if app.admin.verify(password):
+                    token = app.admin.new_session()
+                    self.send_response(200)
+                    self.send_header("content-type", "application/json; charset=utf-8")
+                    self.send_header("set-cookie", f"{ADMIN_COOKIE_NAME}={token}; Path={ADMIN_PATH}; HttpOnly; SameSite=Lax")
+                    body = json.dumps({"session": token}).encode("utf-8")
+                    self.send_header("content-length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                else:
+                    self._json_error(401, "密码不正确")
+                return
+            if path == f"{ADMIN_PATH}/api/start":
+                if not self._is_admin():
+                    self._json_error(401, "unauthorized")
+                    return
+                payload = self._read_json()
+                self._json(app.admin_start(payload.get("client_id", "")))
+                return
+            if path == f"{ADMIN_PATH}/api/stop":
+                if not self._is_admin():
+                    self._json_error(401, "unauthorized")
+                    return
+                payload = self._read_json()
+                self._json(app.admin_stop(payload.get("client_id", "")))
+                return
+            if path == f"{ADMIN_PATH}/api/import":
+                if not self._is_admin():
+                    self._json_error(401, "unauthorized")
+                    return
+                payload = self._read_json()
+                payload_text = json.dumps(payload, ensure_ascii=False)
+                self._json(app.admin_import(payload_text))
+                return
+            if path == f"{ADMIN_PATH}/api/export":
+                if not self._is_admin():
+                    self._json_error(401, "unauthorized")
+                    return
+                payload = self._read_json()
+                cid = payload.get("client_id", "__all__")
+                result = app.admin_all_export() if cid == "__all__" else app.admin_task_export(cid)
+                self._json(result)
+                return
             if path == f"{ADMIN_PATH}/login":
                 form = self._read_form()
                 password = str(form.get("password", ""))
@@ -1654,6 +2017,98 @@ def create_handler(app: BookingWebApp) -> type[BaseHTTPRequestHandler]:
                 client = _form_value(form, "client_id", "")
                 payload = app.admin_all_export() if client == "__all__" else app.admin_task_export(client)
                 self._json(payload)
+                return
+            if path == f"{ADMIN_PATH}/backend/add":
+                if not self._is_admin():
+                    self._redirect(ADMIN_PATH)
+                    return
+                form = self._read_form_multi()
+                name = _form_value(form, "name", "")
+                url = _form_value(form, "url", "")
+                password = _form_value(form, "password", "")
+                result = app.admin_add_backend(name, url, password)
+                msg = result.get("error") or f"已添加节点：{name or url}"
+                self._html(_admin_page(app, True, msg))
+                return
+            if path == f"{ADMIN_PATH}/backend/remove":
+                if not self._is_admin():
+                    self._redirect(ADMIN_PATH)
+                    return
+                form = self._read_form_multi()
+                backend_id = _form_value(form, "backend_id", "")
+                app.admin_remove_backend(backend_id)
+                self._html(_admin_page(app, True, "已删除节点"))
+                return
+            if path == f"{ADMIN_PATH}/backend/test":
+                if not self._is_admin():
+                    self._redirect(ADMIN_PATH)
+                    return
+                form = self._read_form_multi()
+                backend_id = _form_value(form, "backend_id", "")
+                result = app.admin_test_backend(backend_id)
+                msg = result.get("error") or result.get("message") or "测试完成"
+                self._html(_admin_page(app, True, msg))
+                return
+            if path == f"{ADMIN_PATH}/remote/start":
+                if not self._is_admin():
+                    self._redirect(ADMIN_PATH)
+                    return
+                form = self._read_form_multi()
+                backend_id = _form_value(form, "backend_id", "")
+                client = _form_value(form, "client_id", "")
+                client_obj = app._get_backend_client(backend_id)
+                if client_obj:
+                    client_obj.start(client)
+                    self._html(_admin_page(app, True, f"已请求远程开启任务：{client}"))
+                else:
+                    self._html(_admin_page(app, True, "远程节点不存在"))
+                return
+            if path == f"{ADMIN_PATH}/remote/stop":
+                if not self._is_admin():
+                    self._redirect(ADMIN_PATH)
+                    return
+                form = self._read_form_multi()
+                backend_id = _form_value(form, "backend_id", "")
+                client = _form_value(form, "client_id", "")
+                client_obj = app._get_backend_client(backend_id)
+                if client_obj:
+                    client_obj.stop(client)
+                    self._html(_admin_page(app, True, f"已请求远程停止任务：{client}"))
+                else:
+                    self._html(_admin_page(app, True, "远程节点不存在"))
+                return
+            if path == f"{ADMIN_PATH}/remote/update":
+                if not self._is_admin():
+                    self._redirect(ADMIN_PATH)
+                    return
+                form = self._read_form_multi()
+                backend_id = _form_value(form, "backend_id", "")
+                client = _form_value(form, "client_id", "default")
+                client_obj = app._get_backend_client(backend_id)
+                if client_obj:
+                    params = _admin_form_to_params(app.capture.venue_snapshot(), {}, form, _form_value(form, "wx_token", ""))
+                    export_data = {"client_id": client, "params": params}
+                    client_obj.import_tasks(export_data)
+                    self._html(_admin_page(app, True, f"已更新远程任务：{client}"))
+                else:
+                    self._html(_admin_page(app, True, "远程节点不存在"))
+                return
+            if path == f"{ADMIN_PATH}/remote/sync":
+                if not self._is_admin():
+                    self._redirect(ADMIN_PATH)
+                    return
+                form = self._read_form_multi()
+                source_backend = _form_value(form, "backend_id", "local")
+                source_client_id = _form_value(form, "client_id", "")
+                target_backend = _form_value(form, "sync_target", "")
+                if not target_backend:
+                    self._html(_admin_page(app, True, "请选择同步目标"))
+                    return
+                result = app.admin_sync_task(source_backend, source_client_id, target_backend)
+                if result.get("error"):
+                    self._html(_admin_page(app, True, f"同步失败：{result['error']}"))
+                else:
+                    self._html(_admin_page(app, True, f"已同步任务 {source_client_id} 到目标节点"))
                 return
 
             payload = self._read_json()
@@ -1730,6 +2185,14 @@ def create_handler(app: BookingWebApp) -> type[BaseHTTPRequestHandler]:
         def _json(self, payload: dict) -> None:
             data = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
             self.send_response(200)
+            self.send_header("content-type", "application/json; charset=utf-8")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def _json_error(self, status: int, message: str) -> None:
+            data = json.dumps({"error": message}, ensure_ascii=False).encode("utf-8")
+            self.send_response(status)
             self.send_header("content-type", "application/json; charset=utf-8")
             self.send_header("content-length", str(len(data)))
             self.end_headers()
