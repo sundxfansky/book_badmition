@@ -171,7 +171,7 @@ function renderScheduleGrid() {
   const times = allTimes();
   const monitorMode = $("monitorEnabledInput").checked;
   updateMonitorControls();
-  grid.style.gridTemplateColumns = `112px repeat(${courts.length}, minmax(86px, 1fr))`;
+  grid.style.gridTemplateColumns = `92px repeat(${courts.length}, minmax(70px, 1fr))`;
   grid.innerHTML = "";
 
   grid.appendChild(cell("时间 / 场地", "schedule-head schedule-corner"));
@@ -188,7 +188,9 @@ function renderScheduleGrid() {
       const disabled = monitorMode && (!state.siteStatusQueried || status.available);
       button.className = `schedule-cell${selected ? " active" : ""}${status.available ? " available" : " occupied"}${disabled ? " disabled" : ""}`;
       button.disabled = monitorMode && !state.siteStatusQueried;
-      button.innerHTML = `<span>${timeSlot.price} 元</span><small>${status.label}</small>`;
+      const mainText = status.owner ? status.owner : `${timeSlot.price} 元`;
+      const mainClass = status.owner ? "slot-owner" : "";
+      button.innerHTML = `<span class="${mainClass}">${escapeHtml(mainText)}</span><small>${escapeHtml(status.label)}</small>`;
       button.title = status.desc;
       button.addEventListener("click", () => {
         if (monitorMode) {
@@ -284,10 +286,14 @@ function slotStatus(court, timeSlot) {
   if (item.available) {
     return { available: true, label: "可约", desc: "当前场地状态显示可预约" };
   }
+  const owner = String(item.member_name || "").trim();
+  const reason = item.disabled_desc || item.disabled_reason || statusText(item.status) || "已约";
+  const mobile = String(item.mobile || "").trim();
   return {
     available: false,
-    label: "已约",
-    desc: item.disabled_desc || item.disabled_reason || item.member_name || "当前场地状态显示不可预约",
+    label: owner ? reason : "已约",
+    owner,
+    desc: [owner, mobile, reason].filter(Boolean).join(" · ") || "当前场地状态显示不可预约",
   };
 }
 
@@ -426,7 +432,8 @@ async function querySiteStatus() {
       .map((item) => selectionKey(item.court, item.time_slot))
   );
   state.monitorCells = state.monitorCells.filter((item) => occupiedKeys.has(selectionKey(item.court, item.time_slot)));
-  $("siteStatusSummary").textContent = `${data.snapshot.date}：可约 ${data.available_count} 个，已约 ${data.occupied_count} 个`;
+  const people = reservedPeopleSummary(data.snapshot);
+  $("siteStatusSummary").textContent = `${data.snapshot.date}：可约 ${data.available_count} 个，已约 ${data.occupied_count} 个${people ? ` · ${people}` : ""}`;
   if (data.request) {
     $("requestView").textContent = JSON.stringify(data.request, null, 2);
   }
@@ -473,6 +480,19 @@ function reservedItems(snapshot) {
       if (byCourt) return byCourt;
       return String(a.time_slot?.start_time || "").localeCompare(String(b.time_slot?.start_time || ""));
     });
+}
+
+function reservedPeopleSummary(snapshot) {
+  const seen = new Set();
+  const names = [];
+  for (const item of reservedItems(snapshot)) {
+    const name = String(item.member_name || "").trim();
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    names.push(name);
+  }
+  if (!names.length) return "";
+  return `已预约：${names.join("、")}`;
 }
 
 function courtOrder(court) {
