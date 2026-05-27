@@ -151,6 +151,18 @@ class RequestBuilder {
         cachedTemplate = nil
     }
 
+    func defaultHeaders() -> [String: String] {
+        let template = loadTemplate()
+        var result: [String: String] = [:]
+        let keys = ["wx-token", "shop-id", "brand-code"]
+        for key in keys {
+            if let value = template.headers.first(where: { $0.key.lowercased() == key })?.value, !value.isEmpty {
+                result[key] = value
+            }
+        }
+        return result
+    }
+
     private func replaceDateInURL(_ url: String, date: String) -> String {
         guard var components = URLComponents(string: url) else { return url }
         var items = components.queryItems ?? []

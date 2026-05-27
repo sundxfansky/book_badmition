@@ -65,6 +65,7 @@ class BookingEngine {
 
     private func defaultParams() -> [String: Any] {
         let defaults = VenueDefaults.shared
+        let templateHeaders = RequestBuilder.shared.defaultHeaders()
         return [
             "dry_run": false,
             "verify_ssl": false,
@@ -80,7 +81,11 @@ class BookingEngine {
             "monitor_selections": [] as [[String: Any]],
             "courts": [["site_id": defaults.courts.first?.siteId ?? 0, "site_name": defaults.courts.first?.siteName ?? ""]],
             "time_slots": [] as [[String: Any]],
-            "headers": ["shop-id": "", "brand-code": ""],
+            "headers": [
+                "shop-id": templateHeaders["shop-id"] ?? "",
+                "brand-code": templateHeaders["brand-code"] ?? "",
+                "wx-token": templateHeaders["wx-token"] ?? "",
+            ],
         ]
     }
 
