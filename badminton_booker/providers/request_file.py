@@ -72,10 +72,10 @@ class RequestFileProvider(BookingProvider):
         except json.JSONDecodeError:
             return BookingResult(False, f"Non-JSON response: {response_body[:200]}")
 
-        success = payload.get("code") == 0
         data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
         order_id = data.get("order_id") or data.get("reserve_id")
         message = payload.get("msg") or data.get("fail_msg") or str(payload)
+        success = _payload_success(payload)
         return BookingResult(success, str(message), order_id=str(order_id) if order_id else None)
 
 
@@ -84,3 +84,19 @@ def _to_int(value: object) -> int | None:
         return int(str(value))
     except (TypeError, ValueError):
         return None
+
+
+def _payload_success(payload: dict) -> bool:
+    code = payload.get("code")
+    if code == 0 or str(code) == "0":
+        return True
+    if payload.get("success") is True:
+        return True
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    for key in ["order_id", "order_no", "reserve_id", "reserve_no", "pay_order_id", "trade_no"]:
+        if data.get(key) or payload.get(key):
+            return True
+    text = " ".join(str(value or "") for value in [payload.get("msg"), payload.get("message"), data.get("msg")])
+    if any(word in text for word in ["失败", "不可", "已满", "无效", "过期", "取消", "错误", "不足"]):
+        return False
+    return any(word in text for word in ["成功", "待支付", "预约成功", "下单成功"])

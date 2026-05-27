@@ -14,11 +14,17 @@ class WebViewBridge: NSObject, WKScriptMessageHandler {
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let body = message.body as? [String: Any],
-              let id = body["id"] as? Int,
               let path = body["path"] as? String,
               let method = body["method"] as? String else {
+            if let body = message.body as? [String: Any],
+               body["event"] as? String == "status" {
+                let running = body["running"] as? Bool ?? false
+                let waiting = body["waiting_for_schedule"] as? Bool ?? false
+                WebViewCommandCenter.shared.updateRunning(running || waiting)
+            }
             return
         }
+        guard let id = body["id"] as? Int else { return }
 
         let requestBody = body["body"] as? String
 

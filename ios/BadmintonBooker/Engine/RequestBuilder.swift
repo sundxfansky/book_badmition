@@ -95,48 +95,46 @@ class RequestBuilder {
         let date = params["monitor_date"] as? String ?? params["date"] as? String ?? VenueDefaults.shared.sourceDate
         let url = replaceDateInURL(baseURL, date: date)
 
+        var headers = template.siteListHeaders
+        if let paramHeaders = params["headers"] as? [String: String] {
+            for (key, value) in paramHeaders where !value.isEmpty {
+                headers[key] = value
+            }
+        }
+        headers = sanitizedHeaders(headers)
+
         return [
             "method": "GET",
             "url": url,
-            "headers": template.headers,
+            "headers": headers,
         ]
     }
 
     private func buildSingleRequest(template: RequestTemplate, date: String, court: [String: Any], timeSlots: [[String: Any]], params: [String: Any]) -> [String: Any] {
-        let siteId = court["site_id"]
+        let siteId = court["site_id"] ?? 0
+        let siteName = court["site_name"] as? String ?? ""
         let sourceDate = VenueDefaults.shared.sourceDate
 
-        let adjustedSlots: [[String: Any]] = timeSlots.prefix(2).map { slot in
-            var adjusted = slot
-            if date != sourceDate {
-                let dayOffset = daysBetween(from: sourceDate, to: date)
-                let secondsOffset = dayOffset * 86400
-                if let startTs = slot["start_timestamp"] as? Int {
-                    adjusted["start_timestamp"] = startTs + secondsOffset
-                }
-                if let endTs = slot["end_timestamp"] as? Int {
-                    adjusted["end_timestamp"] = endTs + secondsOffset
-                }
-            }
-            adjusted["source_date"] = date
-            return adjusted
-        }
+        var body = template.submitBody
+        body["venues_date"] = date
 
-        let venuesSiteTime: [[String: Any]] = adjustedSlots.map { slot in
-            [
-                "id": siteId as Any,
-                "start_time": slot["start_timestamp"] as Any,
-                "end_time": slot["end_timestamp"] as Any,
-                "price": slot["price"] as Any,
-                "times": slot["times"] as Any,
-            ]
+        let venuesSiteTime: [[String: Any]] = timeSlots.prefix(2).map { slot in
+            let dayOffset = (date != sourceDate) ? daysBetween(from: slot["source_date"] as? String ?? sourceDate, to: date) : 0
+            let secondsOffset = dayOffset * 86400
+            let startTs = (slot["start_timestamp"] as? Int ?? 0) + secondsOffset
+            let endTs = (slot["end_timestamp"] as? Int ?? 0) + secondsOffset
+            return [
+                "site_id": siteId,
+                "site_name": siteName,
+                "start_time": slot["start_time"] as? String ?? "",
+                "end_time": slot["end_time"] as? String ?? "",
+                "start_timestamp": startTs,
+                "end_timestamp": endTs,
+                "times": slot["times"] as? String ?? "1",
+                "price": slot["price"] as? String ?? "0",
+            ] as [String: Any]
         }
-
-        let body: [String: Any] = [
-            "venues_id": template.venuesId,
-            "venues_date": date,
-            "venues_site_time": venuesSiteTime,
-        ]
+        body["venues_site_time"] = venuesSiteTime
 
         var headers = template.headers
         if let paramHeaders = params["headers"] as? [String: String] {
@@ -144,7 +142,8 @@ class RequestBuilder {
                 headers[key] = value
             }
         }
-        headers["Content-Type"] = "application/json"
+        headers["content-type"] = "application/json"
+        headers = sanitizedHeaders(headers)
 
         return [
             "method": "POST",
@@ -169,45 +168,62 @@ class RequestBuilder {
 
         guard let data,
               let entries = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-            let fallback = RequestTemplate(submitURL: "", siteListURL: nil, headers: [:], venuesId: "")
+            let fallback = RequestTemplate(submitURL: "", siteListURL: nil, headers: [:], siteListHeaders: [:], venuesId: "", submitBody: [:])
             cachedTemplate = fallback
             return fallback
         }
 
         var submitURL = ""
         var siteListURL: String?
+        var siteListHeaders: [String: String] = [:]
         var headers: [String: String] = [:]
         var venuesId = ""
+        var submitBody: [String: Any] = [:]
 
         for entry in entries {
             let path = entry["path"] as? String ?? ""
             let hostname = entry["hostname"] as? String ?? ""
 
             if path.contains("/v2/reserve/submit") {
-                submitURL = "https://\(hostname)\(path)"
+                submitURL = (entry["url"] as? String) ?? "https://\(hostname)\(path)"
 
                 if let req = entry["req"] as? [String: Any],
                    let base64 = req["base64"] as? String,
                    let bodyData = Data(base64Encoded: base64),
                    let bodyJson = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any] {
+                    submitBody = bodyJson
                     venuesId = bodyJson["venues_id"] as? String ?? ""
                 }
 
                 if let reqHeaders = (entry["req"] as? [String: Any])?["headers"] as? [String: String] {
                     for (key, value) in reqHeaders {
                         let lower = key.lowercased()
-                        if lower == "host" || lower == "content-length" || lower == "accept-encoding" { continue }
+                        if shouldDropHeader(lower) { continue }
                         headers[key] = value
                     }
                 }
             }
 
             if path.hasPrefix("/v1/venues/venues_site_list") {
-                siteListURL = "https://\(hostname)\(path)"
+                siteListURL = (entry["url"] as? String) ?? "https://\(hostname)\(path)"
+                if let reqHeaders = (entry["req"] as? [String: Any])?["headers"] as? [String: String] {
+                    for (key, value) in reqHeaders {
+                        let lower = key.lowercased()
+                        if shouldDropHeader(lower) { continue }
+                        siteListHeaders[key] = value
+                    }
+                }
             }
         }
 
-        let template = RequestTemplate(submitURL: submitURL, siteListURL: siteListURL, headers: headers, venuesId: venuesId)
+        let template = RequestTemplate(
+            submitURL: submitURL,
+            siteListURL: siteListURL,
+            headers: headers,
+            siteListHeaders: siteListHeaders.isEmpty ? headers : siteListHeaders,
+            venuesId: venuesId,
+            submitBody: submitBody
+        )
         cachedTemplate = template
         return template
     }
@@ -240,6 +256,25 @@ class RequestBuilder {
         return components.string ?? url
     }
 
+    private func sanitizedHeaders(_ headers: [String: String]) -> [String: String] {
+        var result: [String: String] = [:]
+        for (key, value) in headers {
+            let lower = key.lowercased()
+            if shouldDropHeader(lower) || value.isEmpty { continue }
+            result[key] = value
+        }
+        return result
+    }
+
+    private func shouldDropHeader(_ lowercasedName: String) -> Bool {
+        lowercasedName.hasPrefix(":")
+            || lowercasedName == "host"
+            || lowercasedName == "content-length"
+            || lowercasedName == "accept-encoding"
+            || lowercasedName == "connection"
+            || lowercasedName == "priority"
+    }
+
     private func daysBetween(from source: String, to target: String) -> Int {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy/MM/dd"
@@ -258,5 +293,7 @@ struct RequestTemplate {
     let submitURL: String
     let siteListURL: String?
     let headers: [String: String]
+    let siteListHeaders: [String: String]
     let venuesId: String
+    let submitBody: [String: Any]
 }

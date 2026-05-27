@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git checkout *)",
+      "Bash(xcodebuild -project BadmintonBooker.xcodeproj -scheme BadmintonBooker -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' -configuration Debug build)",
+      "Bash(git add *)",
+      "Bash(git *)",
+      "Bash(python3 *)",
+      "Bash(xcrun simctl *)",
+      "Bash(xcodebuild -project BadmintonBooker.xcodeproj -scheme BadmintonBooker -destination 'id=01C19F0E-B493-4B9D-BE39-679DAB5B406F' -configuration Debug build)",
+      "Bash(wait)"
+    ]
+  }
+}

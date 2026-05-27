@@ -20,6 +20,7 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  line-height: 1.35;
 }
 
 .topbar {
@@ -99,7 +100,7 @@ button.danger {
   padding: 16px;
   height: calc(100vh - 86px);
   --request-row: minmax(220px, 1fr);
-  --log-row: 260px;
+  --log-row: 340px;
   grid-template-rows: var(--request-row) var(--log-row);
 }
 
@@ -118,7 +119,7 @@ button.danger {
 
 .layout.request-collapsed {
   --request-row: 64px;
-  --log-row: minmax(360px, 1fr);
+  --log-row: 340px;
 }
 
 .panel-head {
@@ -192,10 +193,31 @@ textarea {
   gap: 8px;
 }
 
+.date-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.date-weekday {
+  min-width: 52px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--soft);
+  color: var(--accent-strong);
+  padding: 6px 9px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
 .schedule-grid {
   display: grid;
   gap: 4px;
-  min-width: 720px;
+  width: 100%;
+  min-width: 0;
   overflow: auto;
 }
 
@@ -234,25 +256,31 @@ textarea {
 }
 
 .schedule-cell {
+  display: grid;
+  align-content: center;
+  gap: 2px;
+  min-height: 46px;
   background: #fff;
   text-align: center;
   min-width: 0;
+  overflow: hidden;
 }
 
 .schedule-cell span,
 .schedule-cell small {
+  display: block;
   max-width: 100%;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .schedule-cell small {
-  display: block;
-  margin-top: 2px;
   color: var(--muted);
   font-size: 10px;
   font-weight: 650;
+  line-height: 1.15;
 }
 
 .schedule-cell.occupied {
@@ -268,6 +296,8 @@ textarea {
   display: block;
   color: #9a3412;
   font-weight: 800;
+  font-size: 11px;
+  line-height: 1.15;
 }
 
 .schedule-cell.available small {
@@ -313,11 +343,26 @@ textarea {
 
 .monitor-panel {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #f8fafc;
+  overflow-x: hidden;
+}
+
+.monitor-panel > * {
+  min-width: 0;
+}
+
+.mobile-fold,
+.mobile-fold-body {
+  display: contents;
+}
+
+.mobile-fold-toggle {
+  display: none;
 }
 
 .monitor-switch {
@@ -333,6 +378,7 @@ textarea {
 .status-text {
   flex: 1 1 220px;
   min-width: 0;
+  max-width: 100%;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.4;
@@ -429,41 +475,6 @@ textarea {
   flex: 1 1 180px;
 }
 
-#dateList {
-  grid-template-columns: repeat(auto-fill, minmax(138px, 1fr));
-}
-
-.date-chip {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.date-chip span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.date-chip button {
-  flex: 0 0 24px;
-  width: 24px;
-  min-width: 24px;
-  height: 24px;
-  min-height: 24px;
-  padding: 0;
-  border-radius: 50%;
-  border-color: var(--line);
-  background: #fff;
-  color: var(--danger);
-  line-height: 1;
-  text-align: center;
-}
-
 .fixed-item {
   cursor: default;
 }
@@ -542,17 +553,12 @@ pre {
   flex-direction: column;
   overflow: hidden;
   min-width: 360px;
-  min-height: 220px;
-  resize: both;
+  min-height: 0;
+  height: 100%;
 }
 
 .log-resize-handle {
-  position: absolute;
-  top: 0;
-  left: 18px;
-  right: 18px;
-  height: 10px;
-  cursor: ns-resize;
+  display: none;
 }
 
 .log-resize-handle::before {
@@ -698,11 +704,6 @@ pre {
   color: var(--muted);
 }
 
-.import-export {
-  display: grid;
-  gap: 10px;
-}
-
 .tab-bar {
   display: flex;
   align-items: center;
@@ -789,6 +790,83 @@ pre {
   cursor: not-allowed;
 }
 
+@media (min-width: 981px) {
+  .topbar {
+    padding: 16px 24px;
+  }
+
+  .layout {
+    grid-template-columns: minmax(620px, 1.08fr) minmax(320px, 0.46fr);
+    gap: 14px;
+    padding: 14px;
+  }
+
+  .panel {
+    padding: 16px;
+  }
+
+  .controls {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-content: start;
+    gap: 12px;
+    overflow-x: hidden;
+  }
+
+  .controls > * {
+    min-width: 0;
+  }
+
+  .controls h3 {
+    margin: 6px 0 0;
+    padding-top: 10px;
+    border-top: 1px solid #edf2f0;
+  }
+
+  .controls h2 + h3 {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: none;
+  }
+
+  .controls .grid.two {
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 10px;
+  }
+
+  .template-row {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .template-row .tpl-btn {
+    padding: 0 10px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .monitor-panel,
+  .fold-body {
+    gap: 10px;
+  }
+
+  .request-panel,
+  .log-panel {
+    min-width: 0;
+  }
+
+  .log-toolbar {
+    gap: 6px;
+  }
+
+  .controls .schedule-grid {
+    min-width: 0;
+    overflow-x: hidden;
+  }
+}
+
 @media (max-width: 980px) {
   body {
     -webkit-text-size-adjust: 100%;
@@ -836,6 +914,83 @@ pre {
     border-radius: 8px;
   }
 
+  .controls {
+    display: grid;
+    gap: 10px;
+  }
+
+  .controls > h2 {
+    margin-bottom: 2px;
+  }
+
+  .controls h3 {
+    margin-top: 14px;
+    margin-bottom: 8px;
+  }
+
+  .mobile-fold {
+    display: block;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fff;
+    overflow: hidden;
+  }
+
+  .mobile-fold-toggle {
+    display: flex;
+    width: 100%;
+    min-height: 42px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    border: none;
+    border-radius: 0;
+    background: #f8fafc;
+    padding: 0 12px;
+    color: var(--text);
+    text-align: left;
+  }
+
+  .mobile-fold-toggle span {
+    display: grid;
+    min-width: 0;
+    gap: 2px;
+  }
+
+  .mobile-fold-toggle strong {
+    font-size: 14px;
+    font-weight: 800;
+  }
+
+  .mobile-fold-toggle em {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 11px;
+    font-style: normal;
+    font-weight: 650;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobile-fold-toggle small {
+    flex: 0 0 auto;
+    color: var(--accent-strong);
+    font-size: 12px;
+    font-weight: 800;
+  }
+
+  .mobile-fold-body {
+    display: grid;
+    gap: 12px;
+    padding: 12px;
+    border-top: 1px solid var(--line);
+  }
+
+  .mobile-fold.collapsed .mobile-fold-body {
+    display: none;
+  }
+
   .grid.two {
     grid-template-columns: 1fr;
   }
@@ -853,14 +1008,15 @@ pre {
   .schedule-head,
   .schedule-time,
   .schedule-cell {
-    min-height: 38px;
+    min-height: 48px;
     padding: 6px 4px;
     font-size: 11px;
   }
 
   .log-panel {
     min-width: 0;
-    min-height: 300px;
+    height: 360px;
+    min-height: 0;
     resize: none;
   }
 
@@ -895,7 +1051,67 @@ pre {
   }
 
   .reserved-table-wrap {
-    max-height: 240px;
+    max-height: 420px;
+    border: none;
+    background: transparent;
+  }
+
+  .reserved-table {
+    display: block;
+    min-width: 0;
+    font-size: 12px;
+  }
+
+  .reserved-table thead {
+    display: none;
+  }
+
+  .reserved-table tbody {
+    display: grid;
+    gap: 10px;
+  }
+
+  .reserved-table tr {
+    display: grid;
+    gap: 8px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fff;
+    padding: 10px;
+  }
+
+  .reserved-table td {
+    display: grid;
+    grid-template-columns: 64px minmax(0, 1fr);
+    gap: 10px;
+    padding: 0;
+    border-bottom: none;
+    line-height: 1.35;
+  }
+
+  .reserved-table td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-weight: 750;
+  }
+
+  .reserved-table .empty-table {
+    display: block;
+    text-align: center;
+  }
+
+  .reserved-table .empty-table::before {
+    content: "";
+  }
+
+  .reserved-actions {
+    align-items: stretch;
+  }
+
+  .reserved-actions input,
+  .reserved-actions button {
+    flex: 1 1 100%;
+    max-width: none;
   }
 
   .date-add {
@@ -905,11 +1121,6 @@ pre {
   .date-add input {
     flex: 1 1 0;
     min-width: 0;
-  }
-
-  .import-export textarea {
-    min-height: 80px;
-    font-size: 11px;
   }
 
   .template-row {
@@ -927,9 +1138,6 @@ pre {
     grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
   }
 
-  #dateList {
-    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-  }
 }
 
 .tpl-btn {

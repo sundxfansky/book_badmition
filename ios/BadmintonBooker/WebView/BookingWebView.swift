@@ -1,6 +1,45 @@
 import SwiftUI
 import WebKit
 
+final class WebViewCommandCenter: ObservableObject {
+    static let shared = WebViewCommandCenter()
+
+    @Published var isRunning = false
+    weak var webView: WKWebView?
+
+    func updateRunning(_ running: Bool) {
+        DispatchQueue.main.async {
+            self.isRunning = running
+        }
+    }
+
+    func toggleRunState() {
+        isRunning ? stop() : start()
+    }
+
+    func start() {
+        evaluate("window.bmintonNativeCommands && window.bmintonNativeCommands.start()")
+    }
+
+    func stop() {
+        evaluate("window.bmintonNativeCommands && window.bmintonNativeCommands.stop()")
+    }
+
+    func nextTab() {
+        evaluate("window.bmintonNativeCommands && window.bmintonNativeCommands.nextTab()")
+    }
+
+    func previousTab() {
+        evaluate("window.bmintonNativeCommands && window.bmintonNativeCommands.previousTab()")
+    }
+
+    private func evaluate(_ script: String) {
+        DispatchQueue.main.async { [weak self] in
+            self?.webView?.evaluateJavaScript(script)
+        }
+    }
+}
+
 struct BookingWebView: UIViewRepresentable {
     @EnvironmentObject var settings: AppSettings
 
@@ -37,6 +76,7 @@ struct BookingWebView: UIViewRepresentable {
         webView.scrollView.maximumZoomScale = 1.0
         webView.scrollView.minimumZoomScale = 1.0
         context.coordinator.webView = webView
+        WebViewCommandCenter.shared.webView = webView
 
         loadLocalHTML(webView)
         return webView

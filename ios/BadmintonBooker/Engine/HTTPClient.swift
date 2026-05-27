@@ -36,18 +36,31 @@ class BookingHTTPClient: NSObject, URLSessionDelegate {
 
         if verifySsl {
             do {
-                let (data, _) = try await verifiedSession.data(for: urlRequest)
+                let (data, response) = try await verifiedSession.data(for: urlRequest)
+                try validate(response: response, data: data)
                 return (String(data: data, encoding: .utf8) ?? "", false)
             } catch let error as NSError where error.domain == NSURLErrorDomain &&
                 (error.code == NSURLErrorServerCertificateUntrusted ||
                  error.code == NSURLErrorServerCertificateHasBadDate ||
                  error.code == NSURLErrorServerCertificateHasUnknownRoot) {
-                let (data, _) = try await unverifiedSession.data(for: urlRequest)
+                let (data, response) = try await unverifiedSession.data(for: urlRequest)
+                try validate(response: response, data: data)
                 return (String(data: data, encoding: .utf8) ?? "", true)
             }
         } else {
-            let (data, _) = try await unverifiedSession.data(for: urlRequest)
+            let (data, response) = try await unverifiedSession.data(for: urlRequest)
+            try validate(response: response, data: data)
             return (String(data: data, encoding: .utf8) ?? "", false)
+        }
+    }
+
+    private func validate(response: URLResponse, data: Data) throws {
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw HTTPClientError.noResponse
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw HTTPClientError.httpStatus(httpResponse.statusCode, body)
         }
     }
 
@@ -63,11 +76,13 @@ class BookingHTTPClient: NSObject, URLSessionDelegate {
 enum HTTPClientError: LocalizedError {
     case invalidURL
     case noResponse
+    case httpStatus(Int, String)
 
     var errorDescription: String? {
         switch self {
         case .invalidURL: return "无效的请求URL"
         case .noResponse: return "无响应"
+        case .httpStatus(let code, let body): return "HTTP \(code): \(body.prefix(200))"
         }
     }
 }

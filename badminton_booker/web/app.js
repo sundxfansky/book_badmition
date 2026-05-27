@@ -6,6 +6,10 @@ const $ = (id) => document.getElementById(id);
 const tabs = [];
 let activeTabId = null;
 
+function defaultRequestCollapsed() {
+  return window.matchMedia?.("(max-width: 980px)").matches || window.innerWidth <= 980;
+}
+
 function generateId() {
   return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
 }
@@ -22,7 +26,7 @@ function createTabState() {
     reservedSnapshot: null,
     previewPinned: false,
     logs: [],
-    requestCollapsed: false,
+    requestCollapsed: defaultRequestCollapsed(),
     running: false,
     waitingForSchedule: false,
   };
@@ -129,8 +133,7 @@ function renderTabs() {
     dot.className = `tab-dot${dotClass ? " " + dotClass : ""}`;
     btn.appendChild(dot);
     const label = document.createElement("span");
-    const dates = tab.state.params?.dates || [];
-    label.textContent = dates.length ? dates[0] : `任务 ${tabs.indexOf(tab) + 1}`;
+    label.textContent = tabSummary(tab, tabs.indexOf(tab));
     btn.appendChild(label);
     btn.addEventListener("click", () => switchTab(tab.id));
     container.appendChild(btn);
@@ -155,23 +158,31 @@ function handleAddTab() {
   bootTab(newTab);
 }
 
+function switchRelativeTab(delta) {
+  if (!tabs.length) return;
+  saveCurrentTabUI();
+  const currentIndex = Math.max(0, tabs.findIndex((t) => t.id === activeTabId));
+  const nextIndex = (currentIndex + delta + tabs.length) % tabs.length;
+  switchTab(tabs[nextIndex].id);
+}
+
 // --- PLACEHOLDER_PARAMS_AND_RENDER ---
 
 function currentParams() {
   cacheWxToken();
   return {
     dry_run: $("dryRunInput").checked,
-    verify_ssl: $("verifySslInput").checked,
+    verify_ssl: false,
     interval_seconds: Number($("intervalInput").value || 0.1),
     max_attempts: Number($("maxAttemptsInput").value || 100000),
     schedule_enabled: $("scheduleEnabledInput").checked,
     scheduled_start_at: normalizeScheduledStart($("scheduledStartInput").value),
-    date: activeState().selectedDates[0] || $("dateInput").value.trim(),
+    date: activeState().selectedDates[0] || dateFieldValue("dateInput"),
     dates: activeState().selectedDates,
     request_mode: requestMode(),
     selections: activeState().selectedCells,
     monitor_enabled: $("monitorEnabledInput").checked,
-    monitor_date: normalizeDate($("monitorDateInput").value) || activeState().selectedDates[0] || $("dateInput").value.trim(),
+    monitor_date: activeState().selectedDates[0] || dateFieldValue("dateInput"),
     monitor_interval_seconds: Number($("monitorIntervalInput").value || 20),
     monitor_selections: activeState().monitorCells,
     headers: {
@@ -188,24 +199,22 @@ function applyParams(params, options = {}) {
   const cachedToken = getCachedWxToken();
   const importedToken = params.headers?.["wx-token"] || "";
   const token = options.preferParamsToken ? importedToken || cachedToken : cachedToken || importedToken;
-  $("dateInput").value = params.date || "";
+  setDateField("dateInput", params.date);
   $("intervalInput").value = params.interval_seconds ?? 0.1;
   $("maxAttemptsInput").value = params.max_attempts ?? 100000;
   $("dryRunInput").checked = params.dry_run === true;
-  $("verifySslInput").checked = params.verify_ssl === true;
   $("scheduleEnabledInput").checked = params.schedule_enabled === true;
   $("scheduledStartInput").value = toDatetimeLocalValue(params.scheduled_start_at || "");
   $("monitorEnabledInput").checked = params.monitor_enabled === true;
-  $("monitorDateInput").value = params.monitor_date || params.date || "";
   $("monitorIntervalInput").value = params.monitor_interval_seconds ?? 20;
-  $("reservedDateInput").value = params.monitor_date || params.date || "";
   $("wxTokenInput").value = token;
   $("shopIdInput").value = params.headers?.["shop-id"] || "";
   $("brandCodeInput").value = params.headers?.["brand-code"] || "";
   $("pairModeInput").checked = params.request_mode === "pair";
   $("singleModeInput").checked = params.request_mode !== "pair";
 
-  s.selectedDates = normalizeDates(params.dates || (params.date ? [params.date] : []));
+  s.selectedDates = normalizeDates(params.dates || (params.date ? [params.date] : [])).slice(0, 1);
+  if (s.selectedDates[0]) setDateField("dateInput", s.selectedDates[0]);
   s.selectedCells = params.selections || defaultSelections(params);
   s.monitorCells = params.monitor_selections || [];
 }
@@ -248,8 +257,10 @@ function defaultSelections(params) {
 
 function renderChoices() {
   renderSubtitle();
-  renderDates();
+  renderDateMeta();
   renderScheduleGrid();
+  updateMobileFoldSummaries();
+  renderTabs();
 }
 
 function renderSubtitle() {
@@ -261,28 +272,10 @@ function renderSubtitle() {
   $("subtitle").textContent = `${s.selectedDates.length} 个日期 · ${mode}`;
 }
 
-function renderDates() {
+function renderDateMeta() {
   const s = activeState();
-  const dateList = $("dateList");
-  dateList.innerHTML = "";
-  for (const date of s.selectedDates) {
-    const chip = document.createElement("div");
-    chip.className = "choice active date-chip";
-    chip.innerHTML = `<span>${date}</span><button type="button" aria-label="删除 ${date}">x</button>`;
-    chip.querySelector("button").addEventListener("click", () => {
-      s.selectedDates = s.selectedDates.filter((item) => item !== date);
-      $("dateInput").value = s.selectedDates[0] || "";
-      if ($("monitorDateInput").value === date) {
-        $("monitorDateInput").value = s.selectedDates[0] || "";
-        s.siteStatusQueried = false;
-        s.siteListSnapshot = null;
-        s.monitorCells = [];
-      }
-      renderChoices();
-      preview();
-    });
-    dateList.appendChild(chip);
-  }
+  const date = s.selectedDates[0] || dateFieldValue("dateInput");
+  $("dateWeekday").textContent = weekdayText(date);
 }
 
 // --- PLACEHOLDER_GRID ---
@@ -294,7 +287,7 @@ function renderScheduleGrid() {
   const times = allTimes();
   const monitorMode = $("monitorEnabledInput").checked;
   updateMonitorControls();
-  grid.style.gridTemplateColumns = `92px repeat(${courts.length}, minmax(70px, 1fr))`;
+  grid.style.gridTemplateColumns = `84px repeat(${courts.length}, minmax(58px, 1fr))`;
   grid.innerHTML = "";
 
   grid.appendChild(cell("时间 / 场地", "schedule-head schedule-corner"));
@@ -317,7 +310,7 @@ function renderScheduleGrid() {
       button.title = status.desc;
       button.addEventListener("click", () => {
         if (monitorMode) {
-          if (!s.siteStatusQueried) { showNotice("请先点击查询当前场地预约情况"); return; }
+          if (!s.siteStatusQueried) { showNotice("请等待自动查询当前场地预约情况完成"); return; }
           if (status.available) { showNotice("这个场地当前可预约，请切换到普通抢票模式"); return; }
           toggleMonitorCell(court, timeSlot);
         } else {
@@ -387,9 +380,7 @@ function normalizeTimes(slots) { return Array.from(slots || []); }
 
 function slotStatus(court, timeSlot) {
   const s = activeState();
-  const monitorMode = $("monitorEnabledInput").checked;
-  if (!monitorMode) return { available: true, label: "可选", desc: "普通抢票模式直接构造预约请求" };
-  if (!s.siteStatusQueried) return { available: true, label: "未查询", desc: "开启监听后，请先查询当前场地预约情况" };
+  if (!s.siteStatusQueried) return { available: true, label: "可选", desc: "普通抢票模式直接构造预约请求" };
   const item = (s.siteListSnapshot?.items || []).find((entry) => sameCell(entry, court, timeSlot));
   if (!item) return { available: true, label: "未知", desc: "当前没有这个场地时间的预约状态" };
   if (item.available) return { available: true, label: "可约", desc: "当前场地状态显示可预约" };
@@ -398,10 +389,19 @@ function slotStatus(court, timeSlot) {
   const mobile = String(item.mobile || "").trim();
   return {
     available: false,
-    label: owner ? reason : "已约",
+    label: owner ? compactReason(reason, owner) : "已约",
     owner,
     desc: [owner, mobile, reason].filter(Boolean).join(" · ") || "当前场地状态显示不可预约",
   };
+}
+
+function compactReason(reason, owner) {
+  let text = String(reason || "已约").trim();
+  const name = String(owner || "").trim();
+  if (name && text.startsWith(name)) {
+    text = text.slice(name.length).trim();
+  }
+  return text || "已约";
 }
 
 function showNotice(message) {
@@ -412,13 +412,11 @@ function showNotice(message) {
 function updateMonitorControls() {
   const s = activeState();
   const enabled = $("monitorEnabledInput").checked;
-  $("monitorDateInput").disabled = !enabled;
   $("monitorIntervalInput").disabled = !enabled;
-  $("querySiteStatusBtn").disabled = !enabled;
-  if (!enabled) {
-    $("siteStatusSummary").textContent = "开启监听后，先选择日期再查询。";
-  } else if (!s.siteStatusQueried) {
-    $("siteStatusSummary").textContent = "请选择日期，然后点击查询当前场地预约情况。";
+  if (!s.siteStatusQueried) {
+    $("siteStatusSummary").textContent = enabled
+      ? "正在自动查询当前预约情况，查询后可选择已约场地监听。"
+      : "正在自动查询顶部日期的预约情况。";
   }
 }
 
@@ -440,6 +438,19 @@ function normalizeDate(value) {
   return `${match[1]}/${match[2].padStart(2, "0")}/${match[3].padStart(2, "0")}`;
 }
 
+function toDateInputValue(value) {
+  const date = normalizeDate(value);
+  return date ? date.replaceAll("/", "-") : "";
+}
+
+function setDateField(id, value) {
+  $(id).value = toDateInputValue(value);
+}
+
+function dateFieldValue(id) {
+  return normalizeDate($(id).value);
+}
+
 function normalizeScheduledStart(value) { return String(value || "").trim().replace("T", " "); }
 
 function toDatetimeLocalValue(value) {
@@ -457,6 +468,55 @@ function defaultScheduledStartValue() {
 }
 
 function requestMode() { return $("pairModeInput").checked ? "pair" : "single"; }
+
+function tabSummary(tab, index) {
+  const s = tab.state || createTabState();
+  const params = s.params || {};
+  const dates = s.selectedDates?.length ? s.selectedDates : normalizeDates(params.dates || (params.date ? [params.date] : []));
+  const selections = (params.monitor_enabled ? s.monitorCells : s.selectedCells) || params.selections || params.monitor_selections || [];
+  const date = compactDate(dates[0]);
+  const time = timeRangeSummary(selections);
+  if (date && time) return `${date} ${time}`;
+  if (date) return date;
+  return `任务 ${index + 1}`;
+}
+
+function compactDate(value) {
+  const date = normalizeDate(value);
+  const match = date.match(/^\d{4}\/(\d{2})\/(\d{2})$/);
+  if (!match) return date;
+  return `${Number(match[1])}/${Number(match[2])}`;
+}
+
+function weekdayText(value) {
+  const date = normalizeDate(value);
+  const match = date.match(/^(\d{4})\/(\d{2})\/(\d{2})$/);
+  if (!match) return "未选择";
+  const parsed = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  if (Number.isNaN(parsed.getTime())) return "未选择";
+  return ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][parsed.getDay()];
+}
+
+function timeRangeSummary(selections) {
+  const slots = (selections || []).map((item) => item.time_slot).filter(Boolean);
+  if (!slots.length) return "";
+  const starts = slots.map((slot) => minutesOf(slot.start_time)).filter((value) => value >= 0);
+  const ends = slots.map((slot) => minutesOf(slot.end_time)).filter((value) => value >= 0);
+  if (!starts.length || !ends.length) return "";
+  return `${formatHour(Math.min(...starts))}-${formatHour(Math.max(...ends))}`;
+}
+
+function minutesOf(value) {
+  const match = String(value || "").match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return -1;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+function formatHour(minutes) {
+  const hour = Math.floor(minutes / 60);
+  const minute = minutes % 60;
+  return minute ? `${hour}:${String(minute).padStart(2, "0")}` : String(hour);
+}
 
 function escapeHtml(value) {
   return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
@@ -507,10 +567,8 @@ async function clearLogs() {
 
 async function querySiteStatus() {
   const s = activeState();
-  if (!$("monitorEnabledInput").checked) { showNotice("请先开启监听场地下单开关"); return; }
-  const date = normalizeDate($("monitorDateInput").value) || s.selectedDates[0] || "";
-  if (!date) { showNotice("请先选择监听日期"); return; }
-  $("monitorDateInput").value = date;
+  const date = s.selectedDates[0] || dateFieldValue("dateInput") || "";
+  if (!date) { showNotice("请先选择顶部日期"); return; }
   s.previewPinned = false;
   $("siteStatusSummary").textContent = `正在查询 ${date} 的场地预约情况...`;
   const data = await api("/api/site-status", { method: "POST", body: JSON.stringify(currentParams()) });
@@ -532,26 +590,10 @@ async function querySiteStatus() {
   await preview();
 }
 
-async function queryReservedStatus() {
-  const s = activeState();
-  const date = normalizeDate($("reservedDateInput").value) || s.selectedDates[0] || "";
-  if (!date) { showNotice("请先输入要查询的日期"); return; }
-  $("reservedDateInput").value = date;
-  $("reservedLookupSummary").textContent = `正在查询 ${date}...`;
-  s.previewPinned = false;
-  const params = { ...currentParams(), monitor_date: date };
-  const data = await api("/api/site-status", { method: "POST", body: JSON.stringify(params) });
-  if (!data.success) {
-    $("reservedLookupSummary").textContent = `查询失败：${data.error || data.message || "未知错误"}`;
-    renderReservedTable([]);
-    if (data.request) $("requestView").textContent = JSON.stringify(data.request, null, 2);
-    return;
-  }
-  s.reservedSnapshot = data.snapshot;
-  const reservedRows = reservedItems(data.snapshot);
-  $("reservedLookupSummary").textContent = `${data.snapshot.date} 已预约 ${reservedRows.length} 个`;
-  if (data.request) $("requestView").textContent = JSON.stringify(data.request, null, 2);
-  renderReservedTable(reservedRows);
+function autoQuerySiteStatus() {
+  querySiteStatus().catch((error) => {
+    $("siteStatusSummary").textContent = `查询失败：${error.message}`;
+  });
 }
 
 // --- PLACEHOLDER_RESERVED ---
@@ -583,50 +625,6 @@ function courtOrder(court) {
   return index >= 0 ? index : Number.MAX_SAFE_INTEGER;
 }
 
-function renderReservedTable(items) {
-  const s = activeState();
-  const tbody = $("reservedTableBody");
-  tbody.innerHTML = "";
-  if (!items.length) {
-    const row = document.createElement("tr");
-    row.innerHTML = '<td colspan="6" class="empty-table">没有查询到被预约的场地。</td>';
-    tbody.appendChild(row);
-    return;
-  }
-  for (const item of items) {
-    const row = document.createElement("tr");
-    row.innerHTML = `
-      <td>${escapeHtml(s.reservedSnapshot?.date || "")}</td>
-      <td>${escapeHtml(item.court?.site_name || "-")}</td>
-      <td>${escapeHtml(item.time_slot?.start_time || "?")}-${escapeHtml(item.time_slot?.end_time || "?")}</td>
-      <td>${escapeHtml(reservedReason(item))}</td>
-      <td>${escapeHtml(item.member_name || "-")}</td>
-      <td>${escapeHtml(item.mobile || "-")}</td>
-    `;
-    tbody.appendChild(row);
-  }
-}
-
-function reservedReason(item) {
-  return item.disabled_desc || item.disabled_reason || statusText(item.status) || "已预约";
-}
-
-async function exportParams() {
-  const params = currentParams();
-  delete params.headers["wx-token"];
-  $("jsonBox").value = JSON.stringify(params, null, 2);
-}
-
-async function importParams() {
-  const params = JSON.parse($("jsonBox").value);
-  applyParams(params, { preferParamsToken: true });
-  const s = activeState();
-  s.siteStatusQueried = false;
-  renderChoices();
-  await save();
-  await preview();
-}
-
 // --- PLACEHOLDER_STATUS ---
 
 function renderStatus(status) {
@@ -641,6 +639,17 @@ function renderStatus(status) {
     $("requestView").textContent = JSON.stringify(status.last_request, null, 2);
   }
   updateAddTabButton();
+  postNativeStatus(status);
+}
+
+function postNativeStatus(status) {
+  try {
+    window.webkit?.messageHandlers?.nativeBridge?.postMessage({
+      event: "status",
+      running: status.running === true,
+      waiting_for_schedule: status.waiting_for_schedule === true,
+    });
+  } catch {}
 }
 
 function renderLogs() {
@@ -712,6 +721,10 @@ function matchesLogFilter(line, filter) {
 }
 
 function grabbedSummary(line) {
+  const swiftTarget = line.match(/请求#\d+ 成功(?:\([^)]*\))?[:：]\s*(.+)$/);
+  if (swiftTarget) return swiftTarget[1];
+  const completedTarget = line.match(/完成第 \d+ 个请求（成功）：(.+)$/);
+  if (completedTarget) return completedTarget[1];
   const target = line.match(/请求（成功）：(.+)$/);
   if (target) return target[1];
   const monitorTarget = line.match(/监听下单第 \d+ 个请求（成功）：(.+)$/);
@@ -796,15 +809,14 @@ async function bootTab(tab) {
       $("scheduledStartInput").value = defaultScheduledStartValue();
     }
     const defDate = defaultDate();
-    $("newDateInput").value = defDate;
-    $("reservedDateInput").value = $("reservedDateInput").value || defDate;
     if (!activeState().selectedDates.length) {
       activeState().selectedDates = [defDate];
-      $("dateInput").value = defDate;
+      setDateField("dateInput", defDate);
     }
     renderChoices();
     await preview();
     await refreshStatus();
+    autoQuerySiteStatus();
     startPolling(tab);
   } catch (error) {
     $("subtitle").textContent = error.message;
@@ -903,10 +915,7 @@ function applyTemplate(date, timeStartHours, mode, btnId) {
 
   const s = activeState();
   s.selectedDates = [date];
-  $("dateInput").value = date;
-  $("newDateInput").value = date;
-  $("monitorDateInput").value = date;
-  $("reservedDateInput").value = date;
+  setDateField("dateInput", date);
 
   const courts = allCourts().slice(0, 7);
   const times = allTimes().filter((t) => timeStartHours.includes(t.start_time));
@@ -925,14 +934,88 @@ function applyTemplate(date, timeStartHours, mode, btnId) {
   preview();
 }
 
+function setupMobileFolds() {
+  const controls = document.querySelector(".controls");
+  if (!controls || controls.dataset.mobileFoldsReady === "true") return;
+  controls.dataset.mobileFoldsReady = "true";
+
+  const headings = Array.from(controls.querySelectorAll(":scope > h3"));
+  headings.forEach((heading, index) => {
+    const wrapper = document.createElement("section");
+    wrapper.className = "mobile-fold";
+    if (index > 0) wrapper.classList.add("collapsed");
+
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "mobile-fold-toggle";
+    toggle.dataset.title = heading.textContent || "";
+    toggle.setAttribute("aria-expanded", String(index === 0));
+    toggle.innerHTML = `<span><strong>${escapeHtml(heading.textContent || "")}</strong><em></em></span><small>${index === 0 ? "收起" : "展开"}</small>`;
+
+    const body = document.createElement("div");
+    body.className = "mobile-fold-body";
+
+    controls.insertBefore(wrapper, heading);
+    wrapper.append(toggle, body);
+
+    let next = heading.nextElementSibling;
+    heading.remove();
+    while (next && next.tagName !== "H3") {
+      const current = next;
+      next = next.nextElementSibling;
+      body.appendChild(current);
+    }
+
+    toggle.addEventListener("click", () => {
+      const collapsed = wrapper.classList.toggle("collapsed");
+      toggle.setAttribute("aria-expanded", String(!collapsed));
+      toggle.querySelector("small").textContent = collapsed ? "展开" : "收起";
+    });
+  });
+  updateMobileFoldSummaries();
+}
+
+function updateMobileFoldSummaries() {
+  for (const toggle of document.querySelectorAll(".mobile-fold-toggle")) {
+    const summary = mobileFoldSummary(toggle.dataset.title || "");
+    const target = toggle.querySelector("em");
+    if (target) target.textContent = summary;
+  }
+}
+
+function mobileFoldSummary(title) {
+  const s = activeState();
+  if (title === "快速模版") {
+    return [compactDate(s.selectedDates[0]), timeRangeSummary(s.selectedCells)].filter(Boolean).join(" · ") || "选择常用时段";
+  }
+  if (title === "请求方式") {
+    return requestMode() === "pair" ? "同场相邻两小时" : "单个时间分开";
+  }
+  if (title === "日期") {
+    return s.selectedDates.length ? s.selectedDates.map(compactDate).join("、") : "未选择";
+  }
+  if (title === "请求参数") {
+    const parts = [];
+    if ($("wxTokenInput").value.trim()) parts.push("token 已填");
+    if ($("shopIdInput").value.trim()) parts.push("shop 已填");
+    if ($("brandCodeInput").value.trim()) parts.push("brand 已填");
+    return parts.join(" · ") || "未填写";
+  }
+  if (title === "监听场地下单") {
+    return $("monitorEnabledInput").checked ? `${compactDate(s.selectedDates[0] || dateFieldValue("dateInput")) || "未选日期"} · 已选 ${s.monitorCells.length}` : "未开启";
+  }
+  if (title === "场地时间") {
+    return $("monitorEnabledInput").checked ? `监听目标 ${s.monitorCells.length}` : `已选 ${s.selectedCells.length}`;
+  }
+  return "";
+}
+
 // --- Event listeners ---
 
 $("previewBtn").addEventListener("click", preview);
 $("saveBtn").addEventListener("click", save);
 $("startBtn").addEventListener("click", start);
 $("stopBtn").addEventListener("click", stop);
-$("exportBtn").addEventListener("click", exportParams);
-$("importBtn").addEventListener("click", importParams);
 $("tplMorningBtn").addEventListener("click", () => applyTemplate(defaultDate(), ["09:00"], "single", "tplMorningBtn"));
 $("tplFriEveBtn").addEventListener("click", () => applyTemplate(nextFridayDate(), ["20:00", "21:00"], "pair", "tplFriEveBtn"));
 $("tplFriEve2Btn").addEventListener("click", () => applyTemplate(nextFridayDate(), ["19:00"], "single", "tplFriEve2Btn"));
@@ -941,21 +1024,11 @@ $("singleModeInput").addEventListener("change", preview);
 $("pairModeInput").addEventListener("change", preview);
 $("monitorEnabledInput").addEventListener("change", () => {
   const s = activeState();
-  if ($("monitorEnabledInput").checked) {
-    $("monitorDateInput").value = $("monitorDateInput").value || s.selectedDates[0] || $("dateInput").value;
-  } else {
+  if (!$("monitorEnabledInput").checked) {
     s.monitorCells = [];
   }
-  s.siteStatusQueried = false;
-  s.siteListSnapshot = null;
   renderChoices();
   preview();
-});
-$("querySiteStatusBtn").addEventListener("click", () => {
-  querySiteStatus().catch((error) => { $("siteStatusSummary").textContent = `查询失败：${error.message}`; });
-});
-$("queryReservedBtn").addEventListener("click", () => {
-  queryReservedStatus().catch((error) => { $("reservedLookupSummary").textContent = `查询失败：${error.message}`; });
 });
 $("toggleRequestBtn").addEventListener("click", toggleRequestPanel);
 $("clearLogsBtn").addEventListener("click", clearLogs);
@@ -963,19 +1036,8 @@ $("logSearchInput").addEventListener("input", renderLogs);
 $("logFilterInput").addEventListener("change", renderLogs);
 $("logFontInput").addEventListener("input", updateLogFontSize);
 $("autoScrollInput").addEventListener("change", scrollLogsToBottom);
-$("addDateBtn").addEventListener("click", () => {
-  const s = activeState();
-  const date = normalizeDate($("newDateInput").value);
-  if (!date) return;
-  s.selectedDates = normalizeDates([...s.selectedDates, date]);
-  $("dateInput").value = s.selectedDates[0] || "";
-  if (!$("monitorDateInput").value) $("monitorDateInput").value = date;
-  if (!$("reservedDateInput").value) $("reservedDateInput").value = date;
-  renderChoices();
-  preview();
-});
 
-for (const id of ["intervalInput", "maxAttemptsInput", "dryRunInput", "verifySslInput", "scheduledStartInput", "monitorIntervalInput", "wxTokenInput", "shopIdInput", "brandCodeInput"]) {
+for (const id of ["intervalInput", "maxAttemptsInput", "dryRunInput", "scheduledStartInput", "monitorIntervalInput", "wxTokenInput", "shopIdInput", "brandCodeInput"]) {
   $(id).addEventListener("change", preview);
 }
 $("scheduleEnabledInput").addEventListener("change", () => {
@@ -987,33 +1049,30 @@ $("scheduleEnabledInput").addEventListener("change", () => {
   preview();
 });
 $("wxTokenInput").addEventListener("input", cacheWxToken);
-$("reservedDateInput").addEventListener("change", () => {
-  $("reservedDateInput").value = normalizeDate($("reservedDateInput").value);
-});
-$("monitorDateInput").addEventListener("change", () => {
-  const s = activeState();
-  const date = normalizeDate($("monitorDateInput").value);
-  $("monitorDateInput").value = date;
-  s.siteStatusQueried = false;
-  s.siteListSnapshot = null;
-  s.monitorCells = [];
-  renderChoices();
-  preview();
-});
 $("dateInput").addEventListener("change", () => {
   const s = activeState();
-  const date = normalizeDate($("dateInput").value);
+  const date = dateFieldValue("dateInput");
   if (date) {
-    s.selectedDates = normalizeDates([date, ...s.selectedDates]);
-    $("dateInput").value = s.selectedDates[0] || "";
-    if (!$("monitorDateInput").value) $("monitorDateInput").value = date;
-    if (!$("reservedDateInput").value) $("reservedDateInput").value = date;
+    s.selectedDates = [date];
+    setDateField("dateInput", s.selectedDates[0]);
+    s.siteStatusQueried = false;
+    s.siteListSnapshot = null;
+    s.monitorCells = [];
   }
   renderChoices();
   preview();
+  autoQuerySiteStatus();
 });
 
 boot().catch((error) => { $("subtitle").textContent = error.message; });
+setupMobileFolds();
 updateLogFontSize();
 setupLogResize();
 renderRequestPanel();
+
+window.bmintonNativeCommands = {
+  start: () => start().catch((error) => showNotice(`启动失败：${error.message}`)),
+  stop: () => stop().catch((error) => showNotice(`停止失败：${error.message}`)),
+  nextTab: () => switchRelativeTab(1),
+  previousTab: () => switchRelativeTab(-1),
+};

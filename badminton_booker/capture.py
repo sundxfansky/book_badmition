@@ -63,8 +63,7 @@ class CaptureStore:
 
     def submit_headers(self) -> dict[str, str]:
         headers = dict(self.submit_entry().get("req", {}).get("headers", {}))
-        for name in ["host", "content-length", "accept-encoding"]:
-            headers.pop(name, None)
+        headers = sanitize_headers(headers)
         headers["content-type"] = "application/json"
         return headers
 
@@ -76,9 +75,7 @@ class CaptureStore:
 
     def site_list_headers(self) -> dict[str, str]:
         headers = dict(self.site_list_entry().get("req", {}).get("headers", {}))
-        for name in ["host", "content-length", "accept-encoding"]:
-            headers.pop(name, None)
-        return headers
+        return sanitize_headers(headers)
 
     def build_site_list_request(self, params: dict, date: str) -> dict:
         entry = self.site_list_entry()
@@ -106,6 +103,10 @@ class CaptureStore:
         if not site_entries:
             return None
         return max(site_entries, key=lambda entry: int(entry.get("order") or 0))
+
+    def decode_site_list_response(self, entry: dict | None = None) -> dict:
+        target = entry or self.site_list_entry()
+        return decode_json_body(target.get("res", {}))
 
     def available_dates(self) -> list[str]:
         dates: list[str] = []
@@ -242,6 +243,18 @@ def decode_json_body(section: dict) -> dict:
         return {}
     decoded = base64.b64decode(encoded).decode("utf-8")
     return json.loads(decoded)
+
+
+def sanitize_headers(headers: dict[str, str]) -> dict[str, str]:
+    blocked = {"host", "content-length", "accept-encoding", "connection", "priority"}
+    return {
+        key: value
+        for key, value in headers.items()
+        if key
+        and value
+        and not key.startswith(":")
+        and key.lower() not in blocked
+    }
 
 
 def snapshot_to_dict(snapshot: VenueSnapshot) -> dict:
