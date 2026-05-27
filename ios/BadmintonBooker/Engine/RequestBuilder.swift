@@ -92,10 +92,17 @@ class RequestBuilder {
     private func loadTemplate() -> RequestTemplate {
         if let cached = cachedTemplate { return cached }
 
-        let docsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        let requestFile = docsDir.appendingPathComponent("request.txt")
+        let data: Data? = {
+            let docsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+            let importedFile = docsDir.appendingPathComponent("request.txt")
+            if let d = try? Data(contentsOf: importedFile) { return d }
+            if let bundledURL = Bundle.main.url(forResource: "request", withExtension: "txt") {
+                return try? Data(contentsOf: bundledURL)
+            }
+            return nil
+        }()
 
-        guard let data = try? Data(contentsOf: requestFile),
+        guard let data,
               let entries = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
             let fallback = RequestTemplate(submitURL: "", siteListURL: nil, headers: [:], venuesId: "")
             cachedTemplate = fallback

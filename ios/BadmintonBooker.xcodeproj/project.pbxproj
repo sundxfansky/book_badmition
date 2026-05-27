@@ -23,6 +23,7 @@
 		A10014 /* index.html in Resources */ = {isa = PBXBuildFile; fileRef = B10014; };
 		A10015 /* app.js in Resources */ = {isa = PBXBuildFile; fileRef = B10015; };
 		A10016 /* styles.css in Resources */ = {isa = PBXBuildFile; fileRef = B10016; };
+		A10017 /* request.txt in Resources */ = {isa = PBXBuildFile; fileRef = B10018; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -44,6 +45,7 @@
 		B10015 /* app.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = app.js; sourceTree = "<group>"; };
 		B10016 /* styles.css */ = {isa = PBXFileReference; lastKnownFileType = text.css; path = styles.css; sourceTree = "<group>"; };
 		B10017 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		B10018 /* request.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = request.txt; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -139,6 +141,7 @@
 			isa = PBXGroup;
 			children = (
 				D10010 /* Web */,
+				B10018 /* request.txt */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -222,6 +225,7 @@
 				A10014 /* index.html in Resources */,
 				A10015 /* app.js in Resources */,
 				A10016 /* styles.css in Resources */,
+				A10017 /* request.txt in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
