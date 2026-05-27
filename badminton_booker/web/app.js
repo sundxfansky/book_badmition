@@ -975,9 +975,17 @@ $("addDateBtn").addEventListener("click", () => {
   preview();
 });
 
-for (const id of ["intervalInput", "maxAttemptsInput", "dryRunInput", "verifySslInput", "scheduleEnabledInput", "scheduledStartInput", "monitorIntervalInput", "wxTokenInput", "shopIdInput", "brandCodeInput"]) {
+for (const id of ["intervalInput", "maxAttemptsInput", "dryRunInput", "verifySslInput", "scheduledStartInput", "monitorIntervalInput", "wxTokenInput", "shopIdInput", "brandCodeInput"]) {
   $(id).addEventListener("change", preview);
 }
+$("scheduleEnabledInput").addEventListener("change", () => {
+  if ($("scheduleEnabledInput").checked && !$("scheduledStartInput").value) {
+    const now = new Date();
+    const pad = (v) => String(v).padStart(2, "0");
+    $("scheduledStartInput").value = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T23:59:30`;
+  }
+  preview();
+});
 $("wxTokenInput").addEventListener("input", cacheWxToken);
 $("reservedDateInput").addEventListener("change", () => {
   $("reservedDateInput").value = normalizeDate($("reservedDateInput").value);
