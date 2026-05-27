@@ -440,6 +440,27 @@ class BookingWebApp:
                 return {"error": "导入到目标节点失败"}
         return result
 
+    def list_tasks(self, client_ids: list[str]) -> dict:
+        results = []
+        for cid in client_ids:
+            key = cid.strip() or "default"
+            with self.states_lock:
+                st = self.states.get(key)
+            if not st:
+                results.append({"client_id": key, "exists": False})
+                continue
+            with st.lock:
+                params = st.params or {}
+                results.append({
+                    "client_id": key,
+                    "exists": True,
+                    "running": st.running,
+                    "waiting_for_schedule": st.waiting_for_schedule,
+                    "date": params.get("date", ""),
+                    "dates": params.get("dates", []),
+                })
+        return {"tasks": results}
+
     def _state_by_id(self, client_id: str) -> RuntimeState | None:
         key = client_id.strip() or "default"
         with self.states_lock:
@@ -1903,6 +1924,10 @@ def create_handler(app: BookingWebApp) -> type[BaseHTTPRequestHandler]:
                 self._json(app.metadata(client_id))
             elif path == "/api/status":
                 self._json(app.status(client_id))
+            elif path == "/api/list-tasks":
+                ids_raw = self.headers.get("x-client-ids") or client_id
+                ids = [cid.strip() for cid in ids_raw.split(",") if cid.strip()]
+                self._json(app.list_tasks(ids))
             elif path == "/api/export":
                 self._json(app.status(client_id)["params"])
             else:
