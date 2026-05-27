@@ -518,6 +518,8 @@ class BookingWebApp:
 
     def _run_loop(self, state: RuntimeState, params: dict) -> None:
         attempt = 0
+        total_success_units = 0
+        successful_slot_keys: set[str] = set()
         try:
             if not self._wait_for_schedule(state, params):
                 return
@@ -527,9 +529,18 @@ class BookingWebApp:
             while not state.stop_event.is_set():
                 attempt += 1
                 self.log(state, f"第 {attempt} 轮提交预约请求")
-                response = self._send_round(state, params)
+                response = self._send_round(state, params, successful_slot_keys)
                 with state.lock:
                     state.last_response = response
+                total_success_units += response.get("success_units", 0)
+                if total_success_units >= 2:
+                    if not response.get("notification_sent"):
+                        response["success"] = True
+                        response["success_units"] = total_success_units
+                        response["stop_reason"] = f"累计成功 {total_success_units} 个场地小时，任务停止"
+                        self._notify_success(state, params, response)
+                    self.log(state, f"累计成功 {total_success_units} 个场地小时，任务结束")
+                    break
                 if response.get("success"):
                     if not response.get("notification_sent"):
                         self._notify_success(state, params, response)
@@ -682,7 +693,7 @@ class BookingWebApp:
         self.log(state, "定时启动时间已到，开始执行抢票任务")
         return True
 
-    def _send_round(self, state: RuntimeState, params: dict) -> dict:
+    def _send_round(self, state: RuntimeState, params: dict, successful_slot_keys: set[str] | None = None) -> dict:
         requests = self.capture.build_submit_requests(params)
         if not requests:
             self.log(state, "没有可提交的请求，请至少选择日期、场地和时间段")
@@ -694,7 +705,8 @@ class BookingWebApp:
 
         responses = []
         success_units = 0
-        successful_slot_keys: set[str] = set()
+        if successful_slot_keys is None:
+            successful_slot_keys = set()
         notified_targets: set[str] = set()
         max_workers = min(len(requests), 16)
         executor = ThreadPoolExecutor(max_workers=max_workers)
