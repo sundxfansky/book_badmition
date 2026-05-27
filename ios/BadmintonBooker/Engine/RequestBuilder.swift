@@ -137,7 +137,7 @@ class RequestBuilder {
                 }
             }
 
-            if path.hasPrefix("/v1/venues_site_list") {
+            if path.hasPrefix("/v1/venues/venues_site_list") {
                 siteListURL = "https://\(hostname)\(path)"
             }
         }
