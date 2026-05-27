@@ -203,6 +203,12 @@ class BookingWebAppTest(unittest.TestCase):
         self.assertEqual(message, "已导入并停止任务：client-a, client-b")
         self.assertEqual([call.args[0] for call in stop.call_args_list], ["client-a", "client-b"])
 
+    def test_success_detection_accepts_string_code_and_pending_payment(self) -> None:
+        self.assertTrue(webapp._payload_success({"code": "0", "msg": "success"}))
+        self.assertTrue(webapp._payload_success({"code": 1001, "msg": "下单成功，请待支付"}))
+        self.assertTrue(webapp._payload_success({"code": 1001, "data": {"order_no": "order-1"}}))
+        self.assertFalse(webapp._payload_success({"code": 1001, "msg": "预约失败，库存不足"}))
+
     def test_notify_uses_wechat_bot_webhook(self) -> None:
         captured = {}
 
@@ -350,6 +356,56 @@ class BookingWebAppTest(unittest.TestCase):
         self.assertEqual(webapp._response_success_units(first, successful_slot_keys), 2)
         self.assertEqual(webapp._response_success_units(duplicate, successful_slot_keys), 0)
         self.assertEqual(webapp._response_success_units(next_time, successful_slot_keys), 1)
+
+    def test_required_success_units_match_selected_slots(self) -> None:
+        params = {
+            "dates": ["2026/06/01"],
+            "selections": [
+                {
+                    "court": {"site_id": 1},
+                    "time_slot": {"start_time": "09:00", "end_time": "10:00"},
+                }
+            ],
+        }
+        self.assertEqual(webapp._required_success_units(params), 1)
+
+        params["selections"].append(
+            {
+                "court": {"site_id": 1},
+                "time_slot": {"start_time": "10:00", "end_time": "11:00"},
+            }
+        )
+        self.assertEqual(webapp._required_success_units(params), 2)
+
+    def test_send_round_stops_after_single_selected_slot_success(self) -> None:
+        app = BookingWebApp("request.txt")
+        state = app.state_for("client-a")
+        params = {
+            "dry_run": False,
+            "headers": {},
+            "dates": ["2026/06/01"],
+            "selections": [
+                {
+                    "court": {"site_id": 3692729935134806, "site_name": "1号场"},
+                    "time_slot": {
+                        "start_time": "09:00",
+                        "end_time": "10:00",
+                        "start_timestamp": 1780275600,
+                        "end_timestamp": 1780279200,
+                        "price": "75",
+                        "times": "1",
+                    },
+                }
+            ],
+        }
+
+        with patch.object(app, "notify"):
+            with patch.object(app, "_send_request", return_value={"success": True, "payload": {"code": 0}}):
+                response = app._send_round(state, params)
+
+        self.assertTrue(response["success"])
+        self.assertEqual(response["success_units"], 1)
+        self.assertEqual(response["stop_reason"], "已达到目标 1 个成功场地小时，停止当前 wx-token 的执行")
 
     def test_fixed_courts_include_v1_v2(self) -> None:
         app = BookingWebApp("request.txt")

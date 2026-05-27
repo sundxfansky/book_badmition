@@ -541,6 +541,7 @@ class BookingWebApp:
         attempt = 0
         total_success_units = 0
         successful_slot_keys: set[str] = set()
+        required_success_units = _required_success_units(params)
         try:
             if not self._wait_for_schedule(state, params):
                 return
@@ -554,13 +555,13 @@ class BookingWebApp:
                 with state.lock:
                     state.last_response = response
                 total_success_units += response.get("success_units", 0)
-                if total_success_units >= 2:
+                if total_success_units >= required_success_units:
                     if not response.get("notification_sent"):
                         response["success"] = True
                         response["success_units"] = total_success_units
-                        response["stop_reason"] = f"累计成功 {total_success_units} 个场地小时，任务停止"
+                        response["stop_reason"] = f"累计成功 {total_success_units}/{required_success_units} 个场地小时，任务停止"
                         self._notify_success(state, params, response)
-                    self.log(state, f"累计成功 {total_success_units} 个场地小时，任务结束")
+                    self.log(state, f"累计成功 {total_success_units}/{required_success_units} 个场地小时，任务结束")
                     break
                 if response.get("success"):
                     if not response.get("notification_sent"):
@@ -622,7 +623,10 @@ class BookingWebApp:
             if not site_response.get("success"):
                 self.log(state, f"查询场地状态失败：{date} {site_response.get('error') or site_response.get('message') or ''}")
                 continue
-            available = _available_monitor_targets(site_response.get("payload") or {}, targets, date)
+            if params.get("dry_run"):
+                available = [item for item in targets if item.get("date") == date]
+            else:
+                available = _available_monitor_targets(site_response.get("payload") or {}, targets, date)
             for item in available:
                 key = _selection_key(item["date"], item["court"], item["time_slot"])
                 if key in successful_slot_keys:
@@ -720,6 +724,7 @@ class BookingWebApp:
             self.log(state, "没有可提交的请求，请至少选择日期、场地和时间段")
             return {"success": False, "responses": []}
 
+        required_success_units = _required_success_units(params)
         self.log(state, f"本轮并发提交 {len(requests)} 个请求")
         for index, request_data in enumerate(requests, start=1):
             self.log(state, f"准备第 {index} 个请求：{_request_target_desc(request_data)}")
@@ -752,13 +757,13 @@ class BookingWebApp:
                         self._notify_request_success(state, params, response, notified_targets)
                     success_units += _response_success_units(response, successful_slot_keys)
 
-                    if success_units >= 2:
+                    if success_units >= required_success_units:
                         cancelled = 0
                         for pending_future in pending:
                             if pending_future.cancel():
                                 cancelled += 1
                         self.log(state, f"成功时间数已达到 {success_units}，停止等待剩余 {len(pending)} 个请求，已取消 {cancelled} 个未开始请求")
-                        self.log(state, "已达到 2 个成功场地小时，停止当前 wx-token 的执行")
+                        self.log(state, f"已达到目标 {required_success_units} 个成功场地小时，停止当前 wx-token 的执行")
                         executor.shutdown(wait=False, cancel_futures=True)
                         responses.sort(key=lambda item: item.get("index", 0))
                         result = {
@@ -767,7 +772,7 @@ class BookingWebApp:
                             "responses": responses,
                             "cancelled": cancelled,
                             "success_targets": _successful_targets(responses),
-                            "stop_reason": "已达到 2 个成功场地小时，停止当前 wx-token 的执行",
+                            "stop_reason": f"已达到目标 {required_success_units} 个成功场地小时，停止当前 wx-token 的执行",
                         }
                         self._notify_success(state, params, result)
                         self.notify(state, _stop_notification_message(result), sync=not params.get("dry_run", True))
@@ -778,7 +783,7 @@ class BookingWebApp:
         responses.sort(key=lambda item: item.get("index", 0))
         self.log(state, f"本轮成功时间数：{success_units}")
         return {
-            "success": success_units >= 2,
+            "success": success_units >= required_success_units,
             "success_units": success_units,
             "responses": responses,
             "success_targets": _successful_targets(responses),
@@ -846,12 +851,16 @@ class BookingWebApp:
             payload = json.loads(raw)
         except json.JSONDecodeError:
             return {"success": False, "raw": raw[:1000]}
-        success = payload.get("code") == 0
+        success = _payload_success(payload)
         return {"success": success, "message": payload.get("msg", payload.get("code")), "payload": payload}
 
     def _send_site_list_request(self, state: RuntimeState, request_data: dict, params: dict) -> dict:
         with state.lock:
             state.last_request = _safe_request_summary(request_data)
+
+        if params.get("dry_run"):
+            payload = self._mock_site_list_payload()
+            return {"success": True, "message": "mock site list", "payload": payload, "mock": True}
 
         request = Request(
             request_data["url"],
@@ -873,7 +882,37 @@ class BookingWebApp:
             payload = json.loads(raw)
         except json.JSONDecodeError:
             return {"success": False, "raw": raw[:1000]}
-        return {"success": payload.get("code") == 0, "message": payload.get("msg", payload.get("code")), "payload": payload}
+        return {"success": _payload_success(payload), "message": payload.get("msg", payload.get("code")), "payload": payload}
+
+    def _mock_site_list_payload(self) -> dict:
+        entry = self.capture.latest_site_list_entry()
+        if entry:
+            return self.capture.decode_site_list_response(entry)
+        snapshot = self.capture.venue_snapshot()
+        return {
+            "code": 0,
+            "msg": "mock",
+            "data": {
+                "list": [
+                    {
+                        "site_id": court.site_id,
+                        "site_name": court.site_name,
+                        "site_data": [
+                            {
+                                **time_slot.__dict__,
+                                "status": 1 if (court_index + time_index) % 4 == 0 else 2,
+                                "disabled_desc": "已预约" if (court_index + time_index) % 4 == 0 else "",
+                                "disabled_reason": "mock" if (court_index + time_index) % 4 == 0 else "",
+                                "member_name": f"Mock用户{court_index + 1}" if (court_index + time_index) % 4 == 0 else "",
+                                "mobile": f"138****{time_index + 1:04d}" if (court_index + time_index) % 4 == 0 else "",
+                            }
+                            for time_index, time_slot in enumerate(snapshot.times)
+                        ],
+                    }
+                    for court_index, court in enumerate(snapshot.courts)
+                ]
+            },
+        }
 
     def _merged_params(self, state: RuntimeState, params: dict) -> dict:
         merged = json.loads(json.dumps(state.params or self.default_params(), ensure_ascii=False))
@@ -1355,6 +1394,44 @@ def _response_success_units(response: dict, successful_slot_keys: set[str] | Non
     return added
 
 
+def _required_success_units(params: dict) -> int:
+    dates = _unique_dates(params.get("dates") or ([params.get("date")] if params.get("date") else []))
+    date_count = max(1, len(dates))
+    selections = params.get("monitor_selections") if params.get("monitor_enabled") else params.get("selections")
+    keys: set[str] = set()
+    for item in selections or []:
+        if not isinstance(item, dict):
+            continue
+        court = item.get("court") if isinstance(item.get("court"), dict) else {}
+        time_slot = item.get("time_slot") if isinstance(item.get("time_slot"), dict) else {}
+        key = _selection_key("", court, time_slot)
+        if key.strip("|"):
+            keys.add(key)
+    if keys:
+        return max(1, len(keys) * date_count)
+
+    time_slots = params.get("time_slots") or params.get("selected_times") or []
+    if time_slots:
+        return max(1, len(time_slots) * date_count)
+    return 2
+
+
+def _payload_success(payload: dict) -> bool:
+    code = payload.get("code")
+    if code == 0 or str(code) == "0":
+        return True
+    if payload.get("success") is True:
+        return True
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    for key in ["order_id", "order_no", "reserve_id", "reserve_no", "pay_order_id", "trade_no"]:
+        if data.get(key) or payload.get(key):
+            return True
+    text = " ".join(str(value or "") for value in [payload.get("msg"), payload.get("message"), data.get("msg")])
+    if any(word in text for word in ["失败", "不可", "已满", "无效", "过期", "取消", "错误", "不足"]):
+        return False
+    return any(word in text for word in ["成功", "待支付", "预约成功", "下单成功"])
+
+
 def _unique_dates(values: list[str]) -> list[str]:
     seen = set()
     result = []
@@ -1402,9 +1479,9 @@ def _format_seconds(seconds: float) -> str:
     hours, remainder = divmod(remaining, 3600)
     minutes, secs = divmod(remainder, 60)
     if hours:
-        return f"{hours}小时{minutes}分{secs}秒"
+        return f"{hours}小时{minutes}分钟{secs}秒"
     if minutes:
-        return f"{minutes}分{secs}秒"
+        return f"{minutes}分钟{secs}秒"
     return f"{secs}秒"
 
 
@@ -1512,7 +1589,7 @@ def _admin_form_to_params(snapshot, current: dict, form: dict[str, list[str]], w
             ),
             "request_mode": _form_value(form, "request_mode", str(current.get("request_mode") or "single")),
             "dry_run": _form_bool(form, "dry_run"),
-            "verify_ssl": _form_bool(form, "verify_ssl"),
+            "verify_ssl": False,
             "schedule_enabled": _form_bool(form, "schedule_enabled"),
             "scheduled_start_at": _form_value(form, "scheduled_start_at", ""),
             "interval_seconds": _to_number(_form_value(form, "interval_seconds", str(current.get("interval_seconds") or 0.1)), 0.1),
@@ -1765,7 +1842,6 @@ def _admin_task_card(task: dict, snapshot, backends: list[dict] | None = None, b
         <label><input type="radio" name="request_mode" value="pair" {_checked(mode == 'pair')} /> 同场相邻两小时一起请求</label>
         <label><input type="checkbox" name="monitor_enabled" {_checked(bool(params.get('monitor_enabled')))} /> 监听下单</label>
         <label><input type="checkbox" name="dry_run" {_checked(bool(params.get('dry_run')))} /> dry-run</label>
-        <label><input type="checkbox" name="verify_ssl" {_checked(bool(params.get('verify_ssl')))} /> SSL 校验</label>
         <label><input type="checkbox" name="schedule_enabled" {_checked(bool(params.get('schedule_enabled')))} /> 定时启动</label>
       </div>
       <div class="selection-block">
