@@ -18,17 +18,17 @@ class BookingEngine {
         case "/api/status":
             return status(clientId: clientId)
         case "/api/preview":
-            return preview(clientId: clientId, params: bodyDict?["params"] as? [String: Any])
+            return preview(clientId: clientId, params: bodyDict)
         case "/api/save":
-            return saveParams(clientId: clientId, params: bodyDict?["params"] as? [String: Any] ?? [:])
+            return saveParams(clientId: clientId, params: bodyDict ?? [:])
         case "/api/start":
-            return start(clientId: clientId, params: bodyDict?["params"] as? [String: Any] ?? [:])
+            return start(clientId: clientId, params: bodyDict ?? [:])
         case "/api/stop":
             return stop(clientId: clientId)
         case "/api/clear-logs":
             return clearLogs(clientId: clientId)
         case "/api/site-status":
-            return try await siteStatus(clientId: clientId, params: bodyDict?["params"] as? [String: Any] ?? [:])
+            return try await siteStatus(clientId: clientId, params: bodyDict ?? [:])
         default:
             return ["error": "Unknown path: \(path)"]
         }
@@ -94,10 +94,10 @@ class BookingEngine {
         return state.lock.withLock {
             [
                 "running": state.running,
-                "params": state.params,
+                "params": state.params.isEmpty ? defaultParams() : state.params,
                 "logs": Array(state.logs.suffix(300)),
-                "last_request": state.lastRequest as Any,
-                "last_response": state.lastResponse as Any,
+                "last_request": state.lastRequest ?? NSNull(),
+                "last_response": state.lastResponse ?? NSNull(),
                 "waiting_for_schedule": state.waitingForSchedule,
                 "scheduled_start_at": state.scheduledStartAt,
             ]
@@ -330,9 +330,17 @@ class BookingEngine {
         var summary: [String: Any] = [:]
         summary["method"] = request["method"] ?? "POST"
         summary["url"] = request["url"] ?? ""
-        if let body = request["body"] as? [String: Any] {
-            summary["body_preview"] = String(describing: body).prefix(200)
+        if var headers = request["headers"] as? [String: String] {
+            if let token = headers["wx-token"], !token.isEmpty {
+                if token.count <= 8 {
+                    headers["wx-token"] = String(repeating: "*", count: token.count)
+                } else {
+                    headers["wx-token"] = "\(token.prefix(4))...\(token.suffix(4))"
+                }
+            }
+            summary["headers"] = headers
         }
+        summary["body"] = request["body"]
         return summary
     }
 }

@@ -7,6 +7,13 @@ class RequestBuilder {
 
     func buildSubmitRequests(params: [String: Any]) -> [[String: Any]] {
         let template = loadTemplate()
+        if template.submitURL.isEmpty { return [] }
+
+        let selections = params["selections"] as? [[String: Any]] ?? []
+        if !selections.isEmpty {
+            return buildSelectionRequests(template: template, params: params, selections: selections)
+        }
+
         let dates = (params["dates"] as? [String]) ?? [params["date"] as? String ?? VenueDefaults.shared.sourceDate]
         let courts = params["courts"] as? [[String: Any]] ?? []
         let timeSlots = params["time_slots"] as? [[String: Any]] ?? []
@@ -21,6 +28,64 @@ class RequestBuilder {
             }
         }
         return requests
+    }
+
+    private func buildSelectionRequests(template: RequestTemplate, params: [String: Any], selections: [[String: Any]]) -> [[String: Any]] {
+        let dates = (params["dates"] as? [String]) ?? [params["date"] as? String ?? VenueDefaults.shared.sourceDate]
+        let mode = params["request_mode"] as? String ?? "single"
+        let groups = selectionGroups(selections: selections, mode: mode)
+
+        var requests: [[String: Any]] = []
+        for date in dates {
+            for group in groups {
+                guard let firstItem = group.first,
+                      let court = firstItem["court"] as? [String: Any] else { continue }
+                let timeSlots = group.compactMap { $0["time_slot"] as? [String: Any] }
+                let req = buildSingleRequest(template: template, date: date, court: court, timeSlots: timeSlots, params: params)
+                requests.append(req)
+            }
+        }
+        return requests
+    }
+
+    private func selectionGroups(selections: [[String: Any]], mode: String) -> [[[String: Any]]] {
+        let normalized = selections.filter { item in
+            item["court"] is [String: Any] && item["time_slot"] is [String: Any]
+        }.sorted { a, b in
+            let aCourtId = String(describing: (a["court"] as? [String: Any])?["site_id"] ?? "")
+            let bCourtId = String(describing: (b["court"] as? [String: Any])?["site_id"] ?? "")
+            if aCourtId != bCourtId { return aCourtId < bCourtId }
+            let aStart = ((a["time_slot"] as? [String: Any])?["start_timestamp"] as? Int) ?? 0
+            let bStart = ((b["time_slot"] as? [String: Any])?["start_timestamp"] as? Int) ?? 0
+            return aStart < bStart
+        }
+
+        if mode != "pair" {
+            return normalized.map { [$0] }
+        }
+
+        var groups: [[[String: Any]]] = []
+        var used = Set<Int>()
+        for (index, item) in normalized.enumerated() {
+            if used.contains(index) { continue }
+            used.insert(index)
+            var pair = [item]
+            let courtId = String(describing: (item["court"] as? [String: Any])?["site_id"] ?? "")
+            let endTs = ((item["time_slot"] as? [String: Any])?["end_timestamp"] as? Int) ?? 0
+
+            for (otherIndex, other) in normalized.enumerated() {
+                if used.contains(otherIndex) { continue }
+                let otherCourtId = String(describing: (other["court"] as? [String: Any])?["site_id"] ?? "")
+                let otherStart = ((other["time_slot"] as? [String: Any])?["start_timestamp"] as? Int) ?? -1
+                if courtId == otherCourtId && endTs == otherStart {
+                    pair.append(other)
+                    used.insert(otherIndex)
+                    break
+                }
+            }
+            groups.append(pair)
+        }
+        return groups
     }
 
     func buildSiteListRequest(params: [String: Any]) -> [String: Any]? {
