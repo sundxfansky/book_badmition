@@ -20,9 +20,7 @@
 		A10011 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10011; };
 		A10012 /* RuntimeState.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10012; };
 		A10013 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10013; };
-		A10014 /* index.html in Resources */ = {isa = PBXBuildFile; fileRef = B10014; };
-		A10015 /* app.js in Resources */ = {isa = PBXBuildFile; fileRef = B10015; };
-		A10016 /* styles.css in Resources */ = {isa = PBXBuildFile; fileRef = B10016; };
+		A10014 /* Web in Resources */ = {isa = PBXBuildFile; fileRef = B10020; };
 		A10017 /* request.txt in Resources */ = {isa = PBXBuildFile; fileRef = B10018; };
 /* End PBXBuildFile section */
 
@@ -41,11 +39,9 @@
 		B10011 /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
 		B10012 /* RuntimeState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeState.swift; sourceTree = "<group>"; };
 		B10013 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
-		B10014 /* index.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = index.html; sourceTree = "<group>"; };
-		B10015 /* app.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = app.js; sourceTree = "<group>"; };
-		B10016 /* styles.css */ = {isa = PBXFileReference; lastKnownFileType = text.css; path = styles.css; sourceTree = "<group>"; };
 		B10017 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B10018 /* request.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = request.txt; sourceTree = "<group>"; };
+		B10020 /* Web */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Web; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -140,7 +136,7 @@
 		D10008 /* Resources */ = {
 			isa = PBXGroup;
 			children = (
-				D10010 /* Web */,
+				B10020 /* Web */,
 				B10018 /* request.txt */,
 			);
 			path = Resources;
@@ -152,16 +148,6 @@
 				B10000 /* BadmintonBooker.app */,
 			);
 			name = Products;
-			sourceTree = "<group>";
-		};
-		D10010 /* Web */ = {
-			isa = PBXGroup;
-			children = (
-				B10014 /* index.html */,
-				B10015 /* app.js */,
-				B10016 /* styles.css */,
-			);
-			path = Web;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -222,9 +208,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A10014 /* index.html in Resources */,
-				A10015 /* app.js in Resources */,
-				A10016 /* styles.css in Resources */,
+				A10014 /* Web in Resources */,
 				A10017 /* request.txt in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
