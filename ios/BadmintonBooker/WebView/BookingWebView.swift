@@ -21,12 +21,21 @@ struct BookingWebView: UIViewRepresentable {
         )
         contentController.addUserScript(bridgeScript)
 
+        let disableZoomScript = WKUserScript(
+            source: "document.addEventListener('gesturestart', function(e) { e.preventDefault(); });",
+            injectionTime: .atDocumentEnd,
+            forMainFrameOnly: true
+        )
+        contentController.addUserScript(disableZoomScript)
+
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
 
         let webView = WKWebView(frame: .zero, configuration: config)
         if #available(iOS 16.4, *) {
             webView.isInspectable = true
         }
+        webView.scrollView.maximumZoomScale = 1.0
+        webView.scrollView.minimumZoomScale = 1.0
         context.coordinator.webView = webView
 
         loadLocalHTML(webView)
