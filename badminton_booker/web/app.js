@@ -795,8 +795,13 @@ async function bootTab(tab) {
     if (!$("scheduledStartInput").value) {
       $("scheduledStartInput").value = defaultScheduledStartValue();
     }
-    $("newDateInput").value = tab.state.snapshot.date;
-    $("reservedDateInput").value = $("reservedDateInput").value || tab.state.snapshot.date;
+    const defDate = defaultDate();
+    $("newDateInput").value = defDate;
+    $("reservedDateInput").value = $("reservedDateInput").value || defDate;
+    if (!activeState().selectedDates.length) {
+      activeState().selectedDates = [defDate];
+      $("dateInput").value = defDate;
+    }
     renderChoices();
     await preview();
     await refreshStatus();
@@ -872,6 +877,54 @@ function getOrCreateClientId() {
   }
 }
 
+// --- Templates ---
+
+function defaultDate() {
+  const d = new Date();
+  d.setDate(d.getDate() + 7);
+  const pad = (v) => String(v).padStart(2, "0");
+  return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())}`;
+}
+
+function nextFridayDate() {
+  const d = new Date();
+  d.setDate(d.getDate() + 7);
+  const day = d.getDay();
+  const daysUntilFriday = ((5 - day + 7) % 7);
+  d.setDate(d.getDate() + daysUntilFriday);
+  const pad = (v) => String(v).padStart(2, "0");
+  return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())}`;
+}
+
+function applyTemplate(date, timeStartHours, mode, btnId) {
+  for (const id of ["tplMorningBtn", "tplFriEveBtn", "tplFriEve2Btn"]) {
+    $(id).classList.toggle("active", id === btnId);
+  }
+
+  const s = activeState();
+  s.selectedDates = [date];
+  $("dateInput").value = date;
+  $("newDateInput").value = date;
+  $("monitorDateInput").value = date;
+  $("reservedDateInput").value = date;
+
+  const courts = allCourts().slice(0, 7);
+  const times = allTimes().filter((t) => timeStartHours.includes(t.start_time));
+  const cells = [];
+  for (const court of courts) {
+    for (const timeSlot of times) {
+      cells.push({ court, time_slot: timeSlot });
+    }
+  }
+  s.selectedCells = cells;
+
+  $("pairModeInput").checked = mode === "pair";
+  $("singleModeInput").checked = mode !== "pair";
+
+  renderChoices();
+  preview();
+}
+
 // --- Event listeners ---
 
 $("previewBtn").addEventListener("click", preview);
@@ -880,6 +933,9 @@ $("startBtn").addEventListener("click", start);
 $("stopBtn").addEventListener("click", stop);
 $("exportBtn").addEventListener("click", exportParams);
 $("importBtn").addEventListener("click", importParams);
+$("tplMorningBtn").addEventListener("click", () => applyTemplate(defaultDate(), ["09:00"], "single", "tplMorningBtn"));
+$("tplFriEveBtn").addEventListener("click", () => applyTemplate(nextFridayDate(), ["20:00", "21:00"], "pair", "tplFriEveBtn"));
+$("tplFriEve2Btn").addEventListener("click", () => applyTemplate(nextFridayDate(), ["19:00"], "single", "tplFriEve2Btn"));
 $("addTabBtn").addEventListener("click", handleAddTab);
 $("singleModeInput").addEventListener("change", preview);
 $("pairModeInput").addEventListener("change", preview);

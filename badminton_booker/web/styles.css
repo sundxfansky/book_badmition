@@ -821,3 +821,15 @@ pre {
     justify-content: flex-start;
   }
 }
+
+.tpl-btn {
+  background: var(--soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.tpl-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent-strong);
+}
