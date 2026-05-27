@@ -979,7 +979,7 @@ for (const id of ["intervalInput", "maxAttemptsInput", "dryRunInput", "verifySsl
   $(id).addEventListener("change", preview);
 }
 $("scheduleEnabledInput").addEventListener("change", () => {
-  if ($("scheduleEnabledInput").checked && !$("scheduledStartInput").value) {
+  if ($("scheduleEnabledInput").checked) {
     const now = new Date();
     const pad = (v) => String(v).padStart(2, "0");
     $("scheduledStartInput").value = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T23:59:30`;
