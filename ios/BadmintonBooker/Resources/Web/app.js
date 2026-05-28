@@ -358,6 +358,11 @@ function renderScheduleGrid() {
       button.innerHTML = `<span class="${mainClass}">${escapeHtml(mainText)}</span><small>${escapeHtml(status.label)}</small>`;
       button.title = status.desc;
       button.addEventListener("click", () => {
+        if (!status.available && status.reserved) {
+          showBookingHint(status);
+        } else {
+          clearBookingHint();
+        }
         if (monitorMode) {
           if (!s.siteStatusQueried) { showNotice("请等待自动查询当前场地预约情况完成"); return; }
           if (status.available) { showNotice("这个场地当前可预约，请切换到普通抢票模式"); return; }
@@ -427,6 +432,26 @@ function selectionKey(court, timeSlot) {
 
 function normalizeTimes(slots) { return Array.from(slots || []); }
 
+const _defaultFieldHint = '普通抢票可直接选择可预约目标；监听模式需要先查询实时状态，只能选择"不可预约"的场地时间。';
+
+function showBookingHint(status) {
+  const el = $("fieldHint");
+  if (!el || !status) return;
+  const parts = [];
+  if (status.owner) parts.push(`<b>预约人：</b>${escapeHtml(status.owner)}`);
+  if (status.mobile) parts.push(`<b>手机号：</b>${escapeHtml(status.mobile)}`);
+  if (status.reason) parts.push(`<b>原因：</b>${escapeHtml(status.reason)}`);
+  el.innerHTML = parts.length ? parts.join("　|　") : _defaultFieldHint;
+  el.classList.toggle("booking-hint", parts.length > 0);
+}
+
+function clearBookingHint() {
+  const el = $("fieldHint");
+  if (!el) return;
+  el.textContent = _defaultFieldHint;
+  el.classList.remove("booking-hint");
+}
+
 function slotStatus(court, timeSlot) {
   const s = activeState();
   if (!s.siteStatusQueried) return { available: true, label: "可选", desc: "普通抢票模式直接构造预约请求" };
@@ -441,6 +466,8 @@ function slotStatus(court, timeSlot) {
     reserved: !!owner,
     label: owner ? compactReason(reason, owner) : "不可预约",
     owner,
+    mobile,
+    reason,
     desc: [owner, mobile, reason].filter(Boolean).join(" · ") || "当前场地状态显示不可预约",
   };
 }

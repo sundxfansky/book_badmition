@@ -178,7 +178,10 @@ button.danger {
     border-radius: 8px;
   }
 
-  .request-panel,
+  .request-panel {
+    display: none;
+  }
+
   .log-panel {
     min-width: 0;
   }

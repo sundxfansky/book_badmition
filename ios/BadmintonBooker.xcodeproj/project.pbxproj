@@ -21,6 +21,7 @@
 		A10012 /* RuntimeState.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10012 /* RuntimeState.swift */; };
 		A10013 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10013 /* SettingsView.swift */; };
 		A10014 /* Web in Resources */ = {isa = PBXBuildFile; fileRef = B10020 /* Web */; };
+		A10015 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B10021 /* Assets.xcassets */; };
 		A10017 /* request.txt in Resources */ = {isa = PBXBuildFile; fileRef = B10018 /* request.txt */; };
 /* End PBXBuildFile section */
 
@@ -42,6 +43,7 @@
 		B10017 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B10018 /* request.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = request.txt; sourceTree = "<group>"; };
 		B10020 /* Web */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Web; sourceTree = "<group>"; };
+		B10021 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -73,6 +75,7 @@
 				D10006 /* Models */,
 				D10007 /* Settings */,
 				D10008 /* Resources */,
+				B10021 /* Assets.xcassets */,
 				B10017 /* Info.plist */,
 			);
 			path = BadmintonBooker;
@@ -209,6 +212,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10014 /* Web in Resources */,
+				A10015 /* Assets.xcassets in Resources */,
 				A10017 /* request.txt in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
