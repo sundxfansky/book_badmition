@@ -43,10 +43,6 @@ function setupEditableFields() {
 const tabs = [];
 let activeTabId = null;
 
-function defaultRequestCollapsed() {
-  return false;
-}
-
 function generateId() {
   return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
 }
@@ -63,7 +59,6 @@ function createTabState() {
     reservedSnapshot: null,
     previewPinned: false,
     logs: [],
-    requestCollapsed: defaultRequestCollapsed(),
     running: false,
     waitingForSchedule: false,
   };
@@ -145,7 +140,6 @@ function saveCurrentTabUI() {
   tab.state.selectedCells = activeState().selectedCells;
   tab.state.monitorCells = activeState().monitorCells;
   tab.state.previewPinned = activeState().previewPinned;
-  tab.state.requestCollapsed = activeState().requestCollapsed;
   tab.state.logs = activeState().logs;
 }
 
@@ -156,7 +150,6 @@ function restoreTabUI(tab) {
   }
   renderChoices();
   renderStatus({ running: s.running, waiting_for_schedule: s.waitingForSchedule, logs: s.logs, last_request: null });
-  renderRequestPanel();
 }
 
 function renderTabs() {
@@ -603,7 +596,6 @@ function statusText(status) {
 
 async function preview() {
   const data = await api("/api/preview", { method: "POST", body: JSON.stringify(currentParams()) });
-  $("requestView").textContent = JSON.stringify(data, null, 2);
   activeState().previewPinned = true;
 }
 
@@ -643,7 +635,6 @@ async function querySiteStatus() {
   s.previewPinned = false;
   const data = await api("/api/site-status", { method: "POST", body: JSON.stringify(currentParams()) });
   if (!data.success) {
-    if (data.request) $("requestView").textContent = JSON.stringify(data.request, null, 2);
     return;
   }
   s.siteListSnapshot = data.snapshot;
@@ -652,7 +643,6 @@ async function querySiteStatus() {
     (s.siteListSnapshot.items || []).filter((item) => !item.available).map((item) => selectionKey(item.court, item.time_slot))
   );
   s.monitorCells = s.monitorCells.filter((item) => occupiedKeys.has(selectionKey(item.court, item.time_slot)));
-  if (data.request) $("requestView").textContent = JSON.stringify(data.request, null, 2);
   renderChoices();
   await preview();
 }
@@ -696,13 +686,8 @@ function renderStatus(status) {
   const s = activeState();
   s.running = status.running;
   s.waitingForSchedule = status.waiting_for_schedule;
-  $("runState").textContent = status.waiting_for_schedule ? "等待定时" : status.running ? "运行中" : "已停止";
-  $("runState").style.background = status.waiting_for_schedule ? "#fef9c3" : status.running ? "#dcfce7" : "#eef4f3";
   s.logs = status.logs || [];
   renderLogs();
-  if (status.last_request && (!s.previewPinned || status.running || status.waiting_for_schedule)) {
-    $("requestView").textContent = JSON.stringify(status.last_request, null, 2);
-  }
   updateAddTabButton();
   postNativeStatus(status);
 }
@@ -781,21 +766,6 @@ function grabbedSummary(line) {
   return "";
 }
 
-function toggleRequestPanel() {
-  const s = activeState();
-  s.requestCollapsed = !s.requestCollapsed;
-  renderRequestPanel();
-}
-
-function renderRequestPanel() {
-  const s = activeState();
-  const panel = document.querySelector(".request-panel");
-  const layout = document.querySelector(".layout");
-  panel.classList.toggle("collapsed", s.requestCollapsed);
-  layout.classList.toggle("request-collapsed", s.requestCollapsed);
-  $("toggleRequestBtn").textContent = s.requestCollapsed ? "展开" : "收起";
-  $("toggleRequestBtn").setAttribute("aria-expanded", String(!s.requestCollapsed));
-}
 
 // --- PLACEHOLDER_RESIZE ---
 
@@ -804,17 +774,10 @@ function setupLogResize() {
   const layout = document.querySelector(".layout");
   const logPanel = document.querySelector(".log-panel");
   let startY = 0;
-  let startRequestHeight = 0;
   let startLogHeight = 0;
 
   handle.addEventListener("pointerdown", (event) => {
-    const requestPanel = document.querySelector(".request-panel");
-    if (activeState().requestCollapsed) {
-      activeState().requestCollapsed = false;
-      renderRequestPanel();
-    }
     startY = event.clientY;
-    startRequestHeight = requestPanel.getBoundingClientRect().height;
     startLogHeight = logPanel.getBoundingClientRect().height;
     handle.setPointerCapture(event.pointerId);
     logPanel.classList.add("resizing");
@@ -823,10 +786,7 @@ function setupLogResize() {
   handle.addEventListener("pointermove", (event) => {
     if (!logPanel.classList.contains("resizing")) return;
     const delta = event.clientY - startY;
-    const available = startRequestHeight + startLogHeight;
-    const requestHeight = Math.max(140, Math.min(available - 220, startRequestHeight + delta));
-    const logHeight = Math.max(220, available - requestHeight);
-    layout.style.setProperty("--request-row", `${requestHeight}px`);
+    const logHeight = Math.max(220, startLogHeight + delta);
     layout.style.setProperty("--log-row", `${logHeight}px`);
   });
 
@@ -994,7 +954,6 @@ $("monitorEnabledInput").addEventListener("change", () => {
   renderChoices();
   preview();
 });
-$("toggleRequestBtn").addEventListener("click", toggleRequestPanel);
 $("clearLogsBtn").addEventListener("click", clearLogs);
 $("autoScrollInput").addEventListener("change", scrollLogsToBottom);
 
@@ -1028,7 +987,6 @@ $("dateInput").addEventListener("change", () => {
 boot().catch((error) => { $("subtitle").textContent = error.message; });
 setupLogResize();
 setupEditableFields();
-renderRequestPanel();
 
 window.bmintonNativeCommands = {
   start: () => start().catch((error) => showNotice(`启动失败：${error.message}`)),

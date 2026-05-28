@@ -155,13 +155,11 @@ button.danger {
 .layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(300px, 0.34fr);
-  grid-rows: 1fr 2fr;
   gap: 16px;
   padding: 16px;
   height: calc(100vh - 86px);
-  --request-row: 1fr;
-  --log-row: 2fr;
-  grid-template-rows: var(--request-row) var(--log-row);
+  --log-row: 1fr;
+  grid-template-rows: var(--log-row);
 }
 
 @media (max-width: 860px) {
@@ -176,10 +174,6 @@ button.danger {
     grid-row: auto;
     border: 1px solid var(--line);
     border-radius: 8px;
-  }
-
-  .request-panel {
-    display: none;
   }
 
   .log-panel {
@@ -209,10 +203,6 @@ button.danger {
   background: transparent;
 }
 
-.layout.request-collapsed {
-  --request-row: 48px;
-  --log-row: 2fr;
-}
 
 .panel-head {
   display: flex;
@@ -220,6 +210,31 @@ button.danger {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 12px;
+}
+
+.section-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 0;
+  margin-bottom: 4px;
+}
+
+.ghost-btn {
+  background: none;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  padding: 2px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  line-height: 1.6;
+}
+
+.ghost-btn:hover {
+  color: var(--danger);
+  border-color: var(--danger);
 }
 
 .grid {
@@ -881,32 +896,6 @@ pre {
   line-height: 1.5;
 }
 
-#requestView {
-  min-height: calc(100% - 34px);
-}
-
-.request-panel {
-  display: flex;
-  flex-direction: column;
-}
-
-.request-panel.collapsed {
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 0 18px;
-}
-
-.request-panel.collapsed .panel-head {
-  margin-bottom: 0;
-  width: 100%;
-}
-
-.request-panel.collapsed #requestView {
-  display: none;
-}
 
 .request-actions {
   display: flex;

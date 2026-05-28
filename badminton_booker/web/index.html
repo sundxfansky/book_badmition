@@ -87,21 +87,14 @@
           </div>
         </div>
 
-        <h3>场地时间</h3>
+        <div class="section-head">
+          <h3>场地时间</h3>
+          <button id="clearSelectionBtn" type="button" class="ghost-btn">清空选择</button>
+        </div>
         <p class="field-hint" id="fieldHint">普通抢票可直接选择可预约目标；监听模式需要先查询实时状态，只能选择"不可预约"的场地时间。</p>
         <div id="scheduleGrid" class="schedule-grid"></div>
       </section>
 
-      <section class="panel request-panel">
-        <div class="panel-head">
-          <h2>当前请求</h2>
-          <div class="request-actions">
-            <span id="runState" class="badge">未知</span>
-            <button id="toggleRequestBtn" type="button" class="icon-button" aria-expanded="false" aria-controls="requestView">展开</button>
-          </div>
-        </div>
-        <pre id="requestView">{}</pre>
-      </section>
 
       <section class="panel log-panel">
         <div id="logResizeHandle" class="log-resize-handle" title="向上拖动放大日志区域"></div>
