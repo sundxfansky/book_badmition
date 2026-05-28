@@ -595,6 +595,43 @@ function statusText(status) {
 
 // --- PLACEHOLDER_ACTIONS ---
 
+let _tokenCheckTimer = null;
+
+async function checkToken() {
+  const title = $("paramsTitle");
+  const btn = $("checkTokenBtn");
+  const token = $("wxTokenInput").value.trim();
+  if (!token) {
+    title.textContent = "抢票参数 - token 过期";
+    title.classList.add("token-expired");
+    btn.textContent = "检查Token";
+    return;
+  }
+  btn.textContent = "检查中...";
+  btn.disabled = true;
+  try {
+    const data = await api("/api/check-token", { method: "POST", body: JSON.stringify({ headers: { "wx-token": token } }) });
+    if (data.success && data.member_name) {
+      title.textContent = `抢票参数 - 你好 ${data.member_name}`;
+      title.classList.remove("token-expired");
+    } else {
+      title.textContent = "抢票参数 - token 过期";
+      title.classList.add("token-expired");
+    }
+  } catch {
+    title.textContent = "抢票参数 - token 过期";
+    title.classList.add("token-expired");
+  } finally {
+    btn.textContent = "检查Token";
+    btn.disabled = false;
+  }
+}
+
+function scheduleTokenCheck() {
+  clearTimeout(_tokenCheckTimer);
+  _tokenCheckTimer = setTimeout(checkToken, 500);
+}
+
 async function preview() {
   const data = await api("/api/preview", { method: "POST", body: JSON.stringify(currentParams()) });
   activeState().previewPinned = true;
@@ -938,6 +975,7 @@ function applyTemplate(date, timeStartHours, mode, btnId) {
 
 // --- Event listeners ---
 
+$("checkTokenBtn").addEventListener("click", checkToken);
 $("previewBtn").addEventListener("click", preview);
 $("saveBtn").addEventListener("click", save);
 $("startBtn").addEventListener("click", start);
@@ -981,7 +1019,7 @@ $("scheduleEnabledInput").addEventListener("change", () => {
   }
   preview();
 });
-$("wxTokenInput").addEventListener("input", cacheWxToken);
+$("wxTokenInput").addEventListener("input", () => { cacheWxToken(); scheduleTokenCheck(); });
 $("dateInput").addEventListener("change", () => {
   const s = activeState();
   const date = dateFieldValue("dateInput");
@@ -997,7 +1035,7 @@ $("dateInput").addEventListener("change", () => {
   autoQuerySiteStatus();
 });
 
-boot().catch((error) => { $("subtitle").textContent = error.message; });
+boot().then(() => checkToken()).catch((error) => { $("subtitle").textContent = error.message; });
 setupLogResize();
 setupEditableFields();
 

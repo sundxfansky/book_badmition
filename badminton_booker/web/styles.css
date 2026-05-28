@@ -1107,6 +1107,11 @@ pre {
   cursor: not-allowed;
 }
 
+#paramsTitle { margin-bottom: 10px; }
+#paramsTitle.token-expired {
+  color: var(--danger);
+}
+
 @media (max-width: 480px) {
   .cell-params {
     flex: 0 1 auto;

@@ -29,6 +29,8 @@ class BookingEngine {
             return clearLogs(clientId: clientId)
         case "/api/site-status":
             return try await siteStatus(clientId: clientId, params: bodyDict ?? [:])
+        case "/api/check-token":
+            return try await checkToken(clientId: clientId)
         default:
             return ["error": "Unknown path: \(path)"]
         }
@@ -162,6 +164,38 @@ class BookingEngine {
         }
         log(state: state, "已停止")
         return status(clientId: clientId)
+    }
+
+    private func checkToken(clientId: String) async throws -> [String: Any] {
+        let state = stateFor(clientId)
+        let params = state.lock.withLock { state.params }
+        let headers = (params["headers"] as? [String: Any]) ?? [:]
+        var token = (headers["wx-token"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+        if token.isEmpty {
+            return ["success": false, "member_name": "", "error": "token 为空"]
+        }
+        let request: [String: Any] = [
+            "url": "https://stmember.styd.cn/v1/member/is_parent?",
+            "method": "GET",
+            "headers": ["wx-token": token],
+        ]
+        do {
+            let (raw, _) = try await httpClient.send(request: request, verifySsl: false)
+            guard let payload = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any] else {
+                return ["success": false, "member_name": "", "error": "响应解析失败"]
+            }
+            if (payload["code"] as? Int) != 0 {
+                return ["success": false, "member_name": "", "error": payload["msg"] as? String ?? "接口返回错误"]
+            }
+            let info = ((payload["data"] as? [String: Any])?["info"] as? [String: Any]) ?? [:]
+            let name = (info["member_name"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+            if !name.isEmpty {
+                return ["success": true, "member_name": name]
+            }
+            return ["success": false, "member_name": "", "error": "无法提取 member_name"]
+        } catch {
+            return ["success": false, "member_name": "", "error": error.localizedDescription]
+        }
     }
 
     private func clearLogs(clientId: String) -> [String: Any] {

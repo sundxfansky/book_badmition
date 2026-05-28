@@ -466,6 +466,33 @@ class BookingWebApp:
         with self.states_lock:
             return self.states.get(key)
 
+    def check_token(self, client_id: str, params: dict) -> dict:
+        state = self.state_for(client_id)
+        self._remember_wx_token(state, params)
+        effective = self._merged_params(state, params)
+        headers = self.capture.submit_headers()
+        headers.update(effective.get("headers") or {})
+        token = str(headers.get("wx-token") or "").strip()
+        if not token:
+            return {"success": False, "member_name": "", "error": "token 为空"}
+        request = Request(
+            "https://stmember.styd.cn/v1/member/is_parent?",
+            headers=headers,
+            method="GET",
+        )
+        try:
+            raw, _ = send_request(request, timeout=10, verify_ssl=False)
+            payload = json.loads(raw)
+        except (HTTPError, URLError, OSError, json.JSONDecodeError) as exc:
+            return {"success": False, "member_name": "", "error": str(exc)}
+        if payload.get("code") != 0:
+            return {"success": False, "member_name": "", "error": payload.get("msg", "接口返回错误")}
+        member_name = (payload.get("data") or {}).get("info") or {}
+        name = str(member_name.get("member_name") or "").strip()
+        if name:
+            return {"success": True, "member_name": name}
+        return {"success": False, "member_name": "", "error": "无法提取 member_name"}
+
     def clear_logs(self, client_id: str) -> dict:
         state = self.state_for(client_id)
         with state.lock:
@@ -2237,6 +2264,8 @@ def create_handler(app: BookingWebApp) -> type[BaseHTTPRequestHandler]:
                 self._json(app.stop(client_id))
             elif path == "/api/clear-logs":
                 self._json(app.clear_logs(client_id))
+            elif path == "/api/check-token":
+                self._json(app.check_token(client_id, payload))
             elif path == "/api/site-status":
                 self._json(app.site_status(client_id, payload))
             else:

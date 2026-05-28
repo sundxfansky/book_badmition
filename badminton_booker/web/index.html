@@ -15,6 +15,7 @@
       <div class="actions">
         <button id="previewBtn">预览请求</button>
         <button id="saveBtn">保存参数</button>
+        <button id="checkTokenBtn">检查Token</button>
         <button id="startBtn" class="primary">开始</button>
         <button id="stopBtn" class="danger">停止</button>
       </div>
@@ -27,7 +28,7 @@
 
     <main class="layout">
       <section class="panel controls">
-        <h2>抢票参数</h2>
+        <h2 id="paramsTitle">抢票参数</h2>
         <div class="cells">
           <div class="cell cell-combo" onclick="document.getElementById('dateInput').showPicker?.()">
             <span class="cell-label">日期</span>
