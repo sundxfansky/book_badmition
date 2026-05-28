@@ -3,11 +3,48 @@ const WX_TOKEN_CACHE_KEY = "badminton_booker.wx_token";
 
 const $ = (id) => document.getElementById(id);
 
+function syncEditableDisplay(field) {
+  const input = field.querySelector("input");
+  const display = field.querySelector(".editable-display");
+  display.textContent = input.value;
+}
+
+function setupEditableFields() {
+  for (const field of document.querySelectorAll(".editable-field")) {
+    const input = field.querySelector("input");
+    const display = field.querySelector(".editable-display");
+    display.addEventListener("click", () => {
+      display.style.display = "none";
+      input.style.display = "";
+      input.focus();
+      input.select();
+    });
+    display.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        display.click();
+      }
+    });
+    const finishEdit = () => {
+      input.style.display = "none";
+      display.style.display = "";
+      display.textContent = input.value;
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    input.addEventListener("blur", finishEdit);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); input.blur(); }
+      if (e.key === "Escape") { input.blur(); }
+    });
+    syncEditableDisplay(field);
+  }
+}
+
 const tabs = [];
 let activeTabId = null;
 
 function defaultRequestCollapsed() {
-  return window.matchMedia?.("(max-width: 980px)").matches || window.innerWidth <= 980;
+  return true;
 }
 
 function generateId() {
@@ -211,7 +248,20 @@ function applyParams(params, options = {}) {
   $("shopIdInput").value = params.headers?.["shop-id"] || "";
   $("brandCodeInput").value = params.headers?.["brand-code"] || "";
   $("pairModeInput").checked = params.request_mode === "pair";
-  $("singleModeInput").checked = params.request_mode !== "pair";
+
+  for (const field of document.querySelectorAll(".editable-field")) {
+    const input = field.querySelector("input");
+    input.style.display = "none";
+    const display = field.querySelector(".editable-display");
+    display.style.display = "";
+    display.textContent = input.value;
+  }
+
+  for (const [inputId, displayId] of [["wxTokenInput", "wxTokenDisplay"], ["shopIdInput", "shopIdDisplay"], ["brandCodeInput", "brandCodeDisplay"]]) {
+    const input = $(inputId);
+    const display = $(displayId);
+    if (input && display) display.textContent = input.value;
+  }
 
   s.selectedDates = normalizeDates(params.dates || (params.date ? [params.date] : [])).slice(0, 1);
   if (s.selectedDates[0]) setDateField("dateInput", s.selectedDates[0]);
@@ -259,7 +309,6 @@ function renderChoices() {
   renderSubtitle();
   renderDateMeta();
   renderScheduleGrid();
-  updateMobileFoldSummaries();
   renderTabs();
 }
 
@@ -267,7 +316,7 @@ function renderSubtitle() {
   const s = activeState();
   if (!s.snapshot) return;
   const mode = $("monitorEnabledInput").checked
-    ? `监听下单 · 已选 ${s.monitorCells.length} 个已约场地时间`
+    ? `监听下单 · 已选 ${s.monitorCells.length} 个不可预约场地时间`
     : `普通抢票 · 已选 ${s.selectedCells.length} 个场地时间`;
   $("subtitle").textContent = `${s.selectedDates.length} 个日期 · ${mode}`;
 }
@@ -302,7 +351,7 @@ function renderScheduleGrid() {
       const selected = monitorMode ? isMonitorCell(court, timeSlot) : isSelectedCell(court, timeSlot);
       const button = document.createElement("button");
       const disabled = monitorMode && (!s.siteStatusQueried || status.available);
-      button.className = `schedule-cell${selected ? " active" : ""}${status.available ? " available" : " occupied"}${disabled ? " disabled" : ""}`;
+      button.className = `schedule-cell${selected ? " active" : ""}${status.available ? " available" : status.reserved ? " reserved" : " occupied"}${disabled ? " disabled" : ""}`;
       button.disabled = monitorMode && !s.siteStatusQueried;
       const mainText = status.owner ? status.owner : `${timeSlot.price} 元`;
       const mainClass = status.owner ? "slot-owner" : "";
@@ -385,23 +434,24 @@ function slotStatus(court, timeSlot) {
   if (!item) return { available: true, label: "未知", desc: "当前没有这个场地时间的预约状态" };
   if (item.available) return { available: true, label: "可约", desc: "当前场地状态显示可预约" };
   const owner = String(item.member_name || "").trim();
-  const reason = item.disabled_desc || item.disabled_reason || statusText(item.status) || "已约";
+  const reason = item.disabled_desc || item.disabled_reason || statusText(item.status) || "不可预约";
   const mobile = String(item.mobile || "").trim();
   return {
     available: false,
-    label: owner ? compactReason(reason, owner) : "已约",
+    reserved: !!owner,
+    label: owner ? compactReason(reason, owner) : "不可预约",
     owner,
     desc: [owner, mobile, reason].filter(Boolean).join(" · ") || "当前场地状态显示不可预约",
   };
 }
 
 function compactReason(reason, owner) {
-  let text = String(reason || "已约").trim();
+  let text = String(reason || "不可预约").trim();
   const name = String(owner || "").trim();
   if (name && text.startsWith(name)) {
     text = text.slice(name.length).trim();
   }
-  return text || "已约";
+  return text || "不可预约";
 }
 
 function showNotice(message) {
@@ -410,14 +460,8 @@ function showNotice(message) {
 }
 
 function updateMonitorControls() {
-  const s = activeState();
   const enabled = $("monitorEnabledInput").checked;
   $("monitorIntervalInput").disabled = !enabled;
-  if (!s.siteStatusQueried) {
-    $("siteStatusSummary").textContent = enabled
-      ? "正在自动查询当前预约情况，查询后可选择已约场地监听。"
-      : "正在自动查询顶部日期的预约情况。";
-  }
 }
 
 function normalizeDates(values) {
@@ -544,7 +588,7 @@ async function save() {
 async function start() {
   const s = activeState();
   if ($("monitorEnabledInput").checked && !s.monitorCells.length) {
-    showNotice("监听下单需要先查询并选择已约场地时间");
+    showNotice("监听下单需要先查询并选择不可预约场地时间");
     return;
   }
   s.previewPinned = false;
@@ -570,10 +614,8 @@ async function querySiteStatus() {
   const date = s.selectedDates[0] || dateFieldValue("dateInput") || "";
   if (!date) { showNotice("请先选择顶部日期"); return; }
   s.previewPinned = false;
-  $("siteStatusSummary").textContent = `正在查询 ${date} 的场地预约情况...`;
   const data = await api("/api/site-status", { method: "POST", body: JSON.stringify(currentParams()) });
   if (!data.success) {
-    $("siteStatusSummary").textContent = `查询失败：${data.error || data.message || "未知错误"}`;
     if (data.request) $("requestView").textContent = JSON.stringify(data.request, null, 2);
     return;
   }
@@ -583,17 +625,13 @@ async function querySiteStatus() {
     (s.siteListSnapshot.items || []).filter((item) => !item.available).map((item) => selectionKey(item.court, item.time_slot))
   );
   s.monitorCells = s.monitorCells.filter((item) => occupiedKeys.has(selectionKey(item.court, item.time_slot)));
-  const people = reservedPeopleSummary(data.snapshot);
-  $("siteStatusSummary").textContent = `${data.snapshot.date}：可约 ${data.available_count} 个，已约 ${data.occupied_count} 个${people ? ` · ${people}` : ""}`;
   if (data.request) $("requestView").textContent = JSON.stringify(data.request, null, 2);
   renderChoices();
   await preview();
 }
 
 function autoQuerySiteStatus() {
-  querySiteStatus().catch((error) => {
-    $("siteStatusSummary").textContent = `查询失败：${error.message}`;
-  });
+  querySiteStatus().catch(() => {});
 }
 
 // --- PLACEHOLDER_RESERVED ---
@@ -656,11 +694,7 @@ function renderLogs() {
   const s = activeState();
   const successContainer = $("successLogView");
   const logContainer = $("logView");
-  const query = $("logSearchInput").value.trim().toLowerCase();
-  const filter = $("logFilterInput").value;
   const visibleLogs = s.logs
-    .filter((line) => !query || line.toLowerCase().includes(query))
-    .filter((line) => matchesLogFilter(line, filter))
     .map((line, index) => ({ line, index, successful: isSuccessLog(line) }));
   const grabbedLogs = visibleLogs
     .map((item) => ({ ...item, summary: grabbedSummary(item.line) }))
@@ -673,7 +707,7 @@ function renderLogs() {
   if (!visibleLogs.length) {
     const empty = document.createElement("div");
     empty.className = "log-empty";
-    empty.textContent = query ? "没有匹配的日志" : "暂无日志";
+    empty.textContent = "暂无日志";
     logContainer.appendChild(empty);
     return;
   }
@@ -708,18 +742,6 @@ function scrollLogsToBottom() {
 
 function isSuccessLog(line) { return line.includes("成功") && !line.includes("失败"); }
 
-function isFailureLog(line) {
-  return /失败|HTTP 错误|网络错误|错误|CERTIFICATE|HTTP \d{3}/i.test(line) && !isSuccessLog(line);
-}
-
-function matchesLogFilter(line, filter) {
-  if (filter === "success") return isSuccessLog(line);
-  if (filter === "failure") return isFailureLog(line);
-  if (filter === "request") return /请求|提交|准备|完成/.test(line);
-  if (filter === "network") return /网络|HTTP|SSL|证书|CERTIFICATE/i.test(line);
-  return true;
-}
-
 function grabbedSummary(line) {
   const swiftTarget = line.match(/请求#\d+ 成功(?:\([^)]*\))?[:：]\s*(.+)$/);
   if (swiftTarget) return swiftTarget[1];
@@ -730,13 +752,6 @@ function grabbedSummary(line) {
   const monitorTarget = line.match(/监听下单第 \d+ 个请求（成功）：(.+)$/);
   if (monitorTarget) return monitorTarget[1];
   return "";
-}
-
-function updateLogFontSize() {
-  const value = $("logFontInput").value;
-  $("logFontValue").textContent = value;
-  $("logView").style.fontSize = `${value}px`;
-  $("successLogView").style.fontSize = `${value}px`;
 }
 
 function toggleRequestPanel() {
@@ -928,86 +943,9 @@ function applyTemplate(date, timeStartHours, mode, btnId) {
   s.selectedCells = cells;
 
   $("pairModeInput").checked = mode === "pair";
-  $("singleModeInput").checked = mode !== "pair";
 
   renderChoices();
   preview();
-}
-
-function setupMobileFolds() {
-  const controls = document.querySelector(".controls");
-  if (!controls || controls.dataset.mobileFoldsReady === "true") return;
-  controls.dataset.mobileFoldsReady = "true";
-
-  const headings = Array.from(controls.querySelectorAll(":scope > h3"));
-  headings.forEach((heading, index) => {
-    const wrapper = document.createElement("section");
-    wrapper.className = "mobile-fold";
-    if (index > 0) wrapper.classList.add("collapsed");
-
-    const toggle = document.createElement("button");
-    toggle.type = "button";
-    toggle.className = "mobile-fold-toggle";
-    toggle.dataset.title = heading.textContent || "";
-    toggle.setAttribute("aria-expanded", String(index === 0));
-    toggle.innerHTML = `<span><strong>${escapeHtml(heading.textContent || "")}</strong><em></em></span><small>${index === 0 ? "收起" : "展开"}</small>`;
-
-    const body = document.createElement("div");
-    body.className = "mobile-fold-body";
-
-    controls.insertBefore(wrapper, heading);
-    wrapper.append(toggle, body);
-
-    let next = heading.nextElementSibling;
-    heading.remove();
-    while (next && next.tagName !== "H3") {
-      const current = next;
-      next = next.nextElementSibling;
-      body.appendChild(current);
-    }
-
-    toggle.addEventListener("click", () => {
-      const collapsed = wrapper.classList.toggle("collapsed");
-      toggle.setAttribute("aria-expanded", String(!collapsed));
-      toggle.querySelector("small").textContent = collapsed ? "展开" : "收起";
-    });
-  });
-  updateMobileFoldSummaries();
-}
-
-function updateMobileFoldSummaries() {
-  for (const toggle of document.querySelectorAll(".mobile-fold-toggle")) {
-    const summary = mobileFoldSummary(toggle.dataset.title || "");
-    const target = toggle.querySelector("em");
-    if (target) target.textContent = summary;
-  }
-}
-
-function mobileFoldSummary(title) {
-  const s = activeState();
-  if (title === "快速模版") {
-    return [compactDate(s.selectedDates[0]), timeRangeSummary(s.selectedCells)].filter(Boolean).join(" · ") || "选择常用时段";
-  }
-  if (title === "请求方式") {
-    return requestMode() === "pair" ? "同场相邻两小时" : "单个时间分开";
-  }
-  if (title === "日期") {
-    return s.selectedDates.length ? s.selectedDates.map(compactDate).join("、") : "未选择";
-  }
-  if (title === "请求参数") {
-    const parts = [];
-    if ($("wxTokenInput").value.trim()) parts.push("token 已填");
-    if ($("shopIdInput").value.trim()) parts.push("shop 已填");
-    if ($("brandCodeInput").value.trim()) parts.push("brand 已填");
-    return parts.join(" · ") || "未填写";
-  }
-  if (title === "监听场地下单") {
-    return $("monitorEnabledInput").checked ? `${compactDate(s.selectedDates[0] || dateFieldValue("dateInput")) || "未选日期"} · 已选 ${s.monitorCells.length}` : "未开启";
-  }
-  if (title === "场地时间") {
-    return $("monitorEnabledInput").checked ? `监听目标 ${s.monitorCells.length}` : `已选 ${s.selectedCells.length}`;
-  }
-  return "";
 }
 
 // --- Event listeners ---
@@ -1020,7 +958,6 @@ $("tplMorningBtn").addEventListener("click", () => applyTemplate(defaultDate(), 
 $("tplFriEveBtn").addEventListener("click", () => applyTemplate(nextFridayDate(), ["20:00", "21:00"], "pair", "tplFriEveBtn"));
 $("tplFriEve2Btn").addEventListener("click", () => applyTemplate(nextFridayDate(), ["19:00"], "single", "tplFriEve2Btn"));
 $("addTabBtn").addEventListener("click", handleAddTab);
-$("singleModeInput").addEventListener("change", preview);
 $("pairModeInput").addEventListener("change", preview);
 $("monitorEnabledInput").addEventListener("change", () => {
   const s = activeState();
@@ -1032,9 +969,6 @@ $("monitorEnabledInput").addEventListener("change", () => {
 });
 $("toggleRequestBtn").addEventListener("click", toggleRequestPanel);
 $("clearLogsBtn").addEventListener("click", clearLogs);
-$("logSearchInput").addEventListener("input", renderLogs);
-$("logFilterInput").addEventListener("change", renderLogs);
-$("logFontInput").addEventListener("input", updateLogFontSize);
 $("autoScrollInput").addEventListener("change", scrollLogsToBottom);
 
 for (const id of ["intervalInput", "maxAttemptsInput", "dryRunInput", "scheduledStartInput", "monitorIntervalInput", "wxTokenInput", "shopIdInput", "brandCodeInput"]) {
@@ -1065,9 +999,8 @@ $("dateInput").addEventListener("change", () => {
 });
 
 boot().catch((error) => { $("subtitle").textContent = error.message; });
-setupMobileFolds();
-updateLogFontSize();
 setupLogResize();
+setupEditableFields();
 renderRequestPanel();
 
 window.bmintonNativeCommands = {

@@ -161,7 +161,7 @@ class BookingWebApp:
             state.params = saved_params
             state.last_request = preview
             state.updated_at = time.time()
-        self.log(state, "已更新抢票参数")
+        self.log(state, "已更新抢票配置")
         return self.status(client_id)
 
     def start(self, client_id: str, params: dict) -> dict:
@@ -1841,7 +1841,7 @@ def _admin_task_card(task: dict, snapshot, backends: list[dict] | None = None, b
         <label><input type="radio" name="request_mode" value="single" {_checked(mode != 'pair')} /> 单个时间分开请求</label>
         <label><input type="radio" name="request_mode" value="pair" {_checked(mode == 'pair')} /> 同场相邻两小时一起请求</label>
         <label><input type="checkbox" name="monitor_enabled" {_checked(bool(params.get('monitor_enabled')))} /> 监听下单</label>
-        <label><input type="checkbox" name="dry_run" {_checked(bool(params.get('dry_run')))} /> dry-run</label>
+        <label style="display:none"><input type="checkbox" name="dry_run" /> dry-run</label>
         <label><input type="checkbox" name="schedule_enabled" {_checked(bool(params.get('schedule_enabled')))} /> 定时启动</label>
       </div>
       <div class="selection-block">

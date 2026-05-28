@@ -190,7 +190,7 @@ cp config.example.json config.json
 - 填写或覆盖 `wx-token`、`shop-id`、`brand-code`
 - 手动添加多个日期，选择代码内固定的 7 个场地和 15 个时间段
 - 查看运行状态和日志
-- 导入/导出抢票参数 JSON
+- 导入/导出抢票配置 JSON
 - dry-run 演练或真实提交
 - 可开关 SSL 证书校验
 

@@ -2,7 +2,7 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
     <title>羽毛球抢票控制台</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
@@ -28,88 +28,67 @@
     <main class="layout">
       <section class="panel controls">
         <h2>抢票参数</h2>
-        <h3>快速模版</h3>
-        <div class="row template-row">
-          <button id="tplMorningBtn" type="button" class="tpl-btn">下周早场 9-10</button>
-          <button id="tplFriEveBtn" type="button" class="tpl-btn">下周五晚场 20-22</button>
-          <button id="tplFriEve2Btn" type="button" class="tpl-btn">下周五晚场 19-20</button>
-        </div>
-        <div class="grid two">
-          <label>
-            日期
-            <div class="date-field">
-              <input id="dateInput" type="date" />
-              <span id="dateWeekday" class="date-weekday">未选择</span>
+        <div class="cells">
+          <div class="cell cell-combo" onclick="document.getElementById('dateInput').showPicker?.()">
+            <span class="cell-label">日期</span>
+            <div class="combo-row">
+              <div class="date-field">
+                <input id="dateInput" type="date" />
+                <span id="dateWeekday" class="date-weekday">未选择</span>
+              </div>
+              <label class="mini-field">间隔<input id="intervalInput" type="number" min="0.1" step="0.1" value="0.1" /></label>
+              <label class="mini-field">次数<input id="maxAttemptsInput" type="number" min="0" value="100000" /></label>
             </div>
-          </label>
-          <label>
-            轮询间隔秒
-            <input id="intervalInput" type="number" min="0.1" step="0.1" value="0.1" />
-          </label>
-          <label>
-            最大尝试次数
-            <input id="maxAttemptsInput" type="number" min="0" value="100000" />
-          </label>
-          <label>
-            启动时间
-            <input id="scheduledStartInput" type="datetime-local" step="1" />
-          </label>
-          <label class="check">
-            <input id="dryRunInput" type="checkbox" />
-            dry-run
-          </label>
-          <label class="check">
-            <input id="scheduleEnabledInput" type="checkbox" />
-            定时启动
-          </label>
-        </div>
-        <h3>请求方式</h3>
-        <div class="row">
-          <label class="check">
-            <input id="singleModeInput" type="radio" name="requestMode" value="single" checked />
-            单个时间分开请求
-          </label>
-          <label class="check">
-            <input id="pairModeInput" type="radio" name="requestMode" value="pair" />
-            同场相邻两小时一起请求
-          </label>
-        </div>
-
-        <h3>请求参数</h3>
-        <div class="grid two">
-          <label>
-            wx-token
-            <input id="wxTokenInput" type="password" autocomplete="off" />
-          </label>
-          <label>
-            shop-id
-            <input id="shopIdInput" type="text" />
-          </label>
-          <label>
-            brand-code
-            <input id="brandCodeInput" type="text" />
-          </label>
-        </div>
-
-        <h3>监听场地下单</h3>
-        <div class="monitor-panel">
-          <label class="check monitor-switch">
-            <input id="monitorEnabledInput" type="checkbox" />
-            开启监听场地下单
-          </label>
-          <div class="grid two">
-            <label>
-              监听间隔秒
-              <input id="monitorIntervalInput" type="number" min="1" step="1" value="20" />
-            </label>
           </div>
-          <div class="row monitor-actions">
-            <span id="siteStatusSummary" class="status-text">打开后会自动查询顶部日期的预约情况。</span>
+          <div class="cell cell-combo">
+            <span class="cell-label">定时启动</span>
+            <div class="combo-row">
+              <label class="toggle"><input id="scheduleEnabledInput" type="checkbox" /><span class="toggle-track"></span></label>
+              <input id="scheduledStartInput" type="datetime-local" step="1" onclick="this.showPicker?.()" />
+            </div>
+          </div>
+          <div class="cell cell-combo">
+            <span class="cell-label">监听下单</span>
+            <div class="combo-row">
+              <label class="toggle"><input id="monitorEnabledInput" type="checkbox" /><span class="toggle-track"></span></label>
+              <label class="mini-field">间隔<input id="monitorIntervalInput" type="number" min="1" step="1" value="20" /></label>
+              <span class="mini-field">一次定两个</span><label class="toggle"><input id="pairModeInput" type="checkbox" /><span class="toggle-track"></span></label>
+            </div>
+          </div>
+          <div class="cell cell-toggle" style="display:none">
+            <span class="cell-label">dry-run</span>
+            <label class="toggle"><input id="dryRunInput" type="checkbox" /><span class="toggle-track"></span></label>
+          </div>
+          <div class="cell cell-combo no-border">
+            <div class="combo-row">
+              <button id="tplMorningBtn" type="button" class="cell-btn">早场 9-10</button>
+              <button id="tplFriEveBtn" type="button" class="cell-btn">周五晚 20-22</button>
+              <button id="tplFriEve2Btn" type="button" class="cell-btn">周五晚 19-20</button>
+            </div>
+          </div>
+          <div class="cell cell-combo no-border">
+            <div class="combo-row">
+              <div class="cell cell-params text-field editable-field">
+                <span class="cell-label">wx-token</span>
+                <span id="wxTokenDisplay" class="text-display editable-display"></span>
+                <input id="wxTokenInput" type="password" autocomplete="off" style="display:none" />
+              </div>
+              <div class="cell cell-params text-field editable-field">
+                <span class="cell-label">shop-id</span>
+                <span id="shopIdDisplay" class="text-display editable-display"></span>
+                <input id="shopIdInput" type="text" style="display:none" />
+              </div>
+              <div class="cell cell-params text-field editable-field">
+                <span class="cell-label">brand-code</span>
+                <span id="brandCodeDisplay" class="text-display editable-display"></span>
+                <input id="brandCodeInput" type="text" style="display:none" />
+              </div>
+            </div>
           </div>
         </div>
 
         <h3>场地时间</h3>
-        <p class="field-hint">普通抢票可直接选择可预约目标；监听模式需要先查询实时状态，只能选择“已约”的场地时间。</p>
+        <p class="field-hint">普通抢票可直接选择可预约目标；监听模式需要先查询实时状态，只能选择"不可预约"的场地时间。</p>
         <div id="scheduleGrid" class="schedule-grid"></div>
       </section>
 
@@ -118,7 +97,7 @@
           <h2>当前请求</h2>
           <div class="request-actions">
             <span id="runState" class="badge">未知</span>
-            <button id="toggleRequestBtn" type="button" class="icon-button" aria-expanded="true" aria-controls="requestView">收起</button>
+            <button id="toggleRequestBtn" type="button" class="icon-button" aria-expanded="false" aria-controls="requestView">展开</button>
           </div>
         </div>
         <pre id="requestView">{}</pre>
@@ -128,26 +107,13 @@
         <div id="logResizeHandle" class="log-resize-handle" title="向上拖动放大日志区域"></div>
         <div class="panel-head">
           <h2>日志</h2>
-        </div>
-        <div class="log-toolbar">
-          <input id="logSearchInput" class="log-search" type="search" placeholder="搜索日志" />
-          <select id="logFilterInput" aria-label="日志筛选">
-            <option value="all">全部</option>
-            <option value="success">只看成功</option>
-            <option value="failure">只看失败</option>
-            <option value="request">只看请求</option>
-            <option value="network">只看网络/HTTP</option>
-          </select>
-          <label class="font-tool">
-            字号
-            <input id="logFontInput" type="range" min="9" max="16" value="11" />
-            <span id="logFontValue">11</span>
-          </label>
-          <label class="toolbar-check">
-            <input id="autoScrollInput" type="checkbox" checked />
-            自动滚动
-          </label>
-          <button id="clearLogsBtn" class="danger" type="button">清除日志</button>
+          <div class="log-controls">
+            <label class="toggle-label">
+              自动滚动
+              <label class="toggle"><input id="autoScrollInput" type="checkbox" checked /><span class="toggle-track"></span></label>
+            </label>
+            <button id="clearLogsBtn" class="danger" type="button">清除日志</button>
+          </div>
         </div>
         <div class="log-stack">
           <div id="successLogView" class="success-log-view" aria-label="成功日志"></div>

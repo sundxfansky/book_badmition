@@ -120,7 +120,7 @@ class BookingEngine {
         state.lock.withLock {
             state.params = merged
         }
-        log(state: state, "已更新抢票参数")
+        log(state: state, "已更新抢票配置")
         return status(clientId: clientId)
     }
 
