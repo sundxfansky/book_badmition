@@ -30,7 +30,7 @@ class BookingEngine {
         case "/api/site-status":
             return try await siteStatus(clientId: clientId, params: bodyDict ?? [:])
         case "/api/check-token":
-            return try await checkToken(clientId: clientId)
+            return try await checkToken(clientId: clientId, params: bodyDict ?? [:])
         default:
             return ["error": "Unknown path: \(path)"]
         }
@@ -166,15 +166,18 @@ class BookingEngine {
         return status(clientId: clientId)
     }
 
-    private func checkToken(clientId: String) async throws -> [String: Any] {
+    private func checkToken(clientId: String, params: [String: Any]) async throws -> [String: Any] {
         let state = stateFor(clientId)
-        let effective = mergedParams(state: state, incoming: [:])
-        var headers = RequestBuilder.shared.defaultHeaders()
+        let effective = mergedParams(state: state, incoming: params)
+        var headers = RequestBuilder.shared.fullHeaders()
         if let paramHeaders = effective["headers"] as? [String: String] {
-            headers.merge(paramHeaders) { _, new in new }
+            for (key, value) in paramHeaders where !value.isEmpty {
+                headers[key] = value
+            }
         }
-        let token = (headers["wx-token"] ?? "").trimmingCharacters(in: .whitespaces)
-        if token.isEmpty {
+        let userToken = ((effective["headers"] as? [String: String])?["wx-token"] ?? "").trimmingCharacters(in: .whitespaces)
+        headers["wx-token"] = userToken
+        if userToken.isEmpty {
             return ["success": false, "member_name": "", "error": "token 为空"]
         }
         let request: [String: Any] = [
@@ -182,8 +185,10 @@ class BookingEngine {
             "method": "GET",
             "headers": headers,
         ]
+        log(state: state, "校验Token请求: method=GET, url=\(request["url"] ?? ""), headers=\(headers)")
         do {
             let (raw, _) = try await httpClient.send(request: request, verifySsl: false)
+            log(state: state, "校验Token响应: \(raw)")
             guard let payload = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any] else {
                 return ["success": false, "member_name": "", "error": "响应解析失败"]
             }
@@ -561,14 +566,7 @@ class BookingEngine {
         var summary: [String: Any] = [:]
         summary["method"] = request["method"] ?? "POST"
         summary["url"] = request["url"] ?? ""
-        if var headers = request["headers"] as? [String: String] {
-            if let token = headers["wx-token"], !token.isEmpty {
-                if token.count <= 8 {
-                    headers["wx-token"] = String(repeating: "*", count: token.count)
-                } else {
-                    headers["wx-token"] = "\(token.prefix(4))...\(token.suffix(4))"
-                }
-            }
+        if let headers = request["headers"] as? [String: String] {
             summary["headers"] = headers
         }
         summary["body"] = request["body"]

@@ -244,6 +244,10 @@ class RequestBuilder {
         return result
     }
 
+    func fullHeaders() -> [String: String] {
+        loadTemplate().headers
+    }
+
     private func replaceDateInURL(_ url: String, date: String) -> String {
         guard var components = URLComponents(string: url) else { return url }
         var items = components.queryItems ?? []
