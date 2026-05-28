@@ -168,16 +168,19 @@ class BookingEngine {
 
     private func checkToken(clientId: String) async throws -> [String: Any] {
         let state = stateFor(clientId)
-        let params = state.lock.withLock { state.params }
-        let headers = (params["headers"] as? [String: Any]) ?? [:]
-        var token = (headers["wx-token"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+        let effective = mergedParams(state: state, incoming: [:])
+        var headers = RequestBuilder.shared.defaultHeaders()
+        if let paramHeaders = effective["headers"] as? [String: String] {
+            headers.merge(paramHeaders) { _, new in new }
+        }
+        let token = (headers["wx-token"] ?? "").trimmingCharacters(in: .whitespaces)
         if token.isEmpty {
             return ["success": false, "member_name": "", "error": "token 为空"]
         }
         let request: [String: Any] = [
             "url": "https://stmember.styd.cn/v1/member/is_parent?",
             "method": "GET",
-            "headers": ["wx-token": token],
+            "headers": headers,
         ]
         do {
             let (raw, _) = try await httpClient.send(request: request, verifySsl: false)

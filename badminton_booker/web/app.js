@@ -976,8 +976,7 @@ function applyTemplate(date, timeStartHours, mode, btnId) {
 // --- Event listeners ---
 
 $("checkTokenBtn").addEventListener("click", checkToken);
-$("previewBtn").addEventListener("click", preview);
-$("saveBtn").addEventListener("click", save);
+
 $("startBtn").addEventListener("click", start);
 $("stopBtn").addEventListener("click", stop);
 $("tplMorningBtn").addEventListener("click", () => applyTemplate(defaultDate(), ["09:00"], "single", "tplMorningBtn"));

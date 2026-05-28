@@ -43,6 +43,7 @@ function setupEditableFields() {
 const tabs = [];
 let activeTabId = null;
 
+
 function generateId() {
   return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
 }
@@ -975,24 +976,13 @@ function applyTemplate(date, timeStartHours, mode, btnId) {
 // --- Event listeners ---
 
 $("checkTokenBtn").addEventListener("click", checkToken);
-$("previewBtn").addEventListener("click", preview);
-$("saveBtn").addEventListener("click", save);
+
 $("startBtn").addEventListener("click", start);
 $("stopBtn").addEventListener("click", stop);
 $("tplMorningBtn").addEventListener("click", () => applyTemplate(defaultDate(), ["09:00"], "single", "tplMorningBtn"));
 $("tplFriEveBtn").addEventListener("click", () => applyTemplate(nextFridayDate(), ["20:00", "21:00"], "pair", "tplFriEveBtn"));
 $("tplFriEve2Btn").addEventListener("click", () => applyTemplate(nextFridayDate(), ["19:00"], "single", "tplFriEve2Btn"));
 $("addTabBtn").addEventListener("click", handleAddTab);
-$("pairModeInput").addEventListener("change", preview);
-$("monitorEnabledInput").addEventListener("change", () => {
-  const s = activeState();
-  if (!$("monitorEnabledInput").checked) {
-    s.monitorCells = [];
-  }
-  renderChoices();
-  preview();
-});
-$("clearLogsBtn").addEventListener("click", clearLogs);
 $("clearSelectionBtn").addEventListener("click", () => {
   const s = activeState();
   const monitorMode = $("monitorEnabledInput").checked;
@@ -1005,6 +995,16 @@ $("clearSelectionBtn").addEventListener("click", () => {
   renderChoices();
   preview();
 });
+$("pairModeInput").addEventListener("change", preview);
+$("monitorEnabledInput").addEventListener("change", () => {
+  const s = activeState();
+  if (!$("monitorEnabledInput").checked) {
+    s.monitorCells = [];
+  }
+  renderChoices();
+  preview();
+});
+$("clearLogsBtn").addEventListener("click", clearLogs);
 $("autoScrollInput").addEventListener("change", scrollLogsToBottom);
 
 for (const id of ["intervalInput", "maxAttemptsInput", "dryRunInput", "scheduledStartInput", "monitorIntervalInput", "wxTokenInput", "shopIdInput", "brandCodeInput"]) {
