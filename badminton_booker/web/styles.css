@@ -732,6 +732,14 @@ textarea {
   margin: -4px 0 10px;
   color: var(--muted);
   font-size: 12px;
+  transition: color 0.2s;
+}
+.field-hint.booking-hint {
+  color: #b42318;
+}
+.field-hint.booking-hint b {
+  color: var(--muted);
+  font-weight: 600;
 }
 
 .status-text {
