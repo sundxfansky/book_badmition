@@ -173,14 +173,11 @@ function renderTabs() {
 }
 
 function updateAddTabButton() {
-  const tab = activeTab();
-  const canAdd = tab && (tab.state.running || tab.state.waitingForSchedule);
-  $("addTabBtn").disabled = !canAdd;
+  $("addTabBtn").disabled = tabs.length === 0;
 }
 
 function handleAddTab() {
-  const tab = activeTab();
-  if (!tab || (!tab.state.running && !tab.state.waitingForSchedule)) return;
+  if (!tabs.length) return;
   saveCurrentTabUI();
   const newTab = addTab();
   activeTabId = newTab.id;

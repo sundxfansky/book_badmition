@@ -4,11 +4,15 @@ import WebKit
 class WebViewBridge: NSObject, WKScriptMessageHandler {
     var settings: AppSettings
     weak var webView: WKWebView?
+    weak var commandCenter: WebViewCommandCenter?
+    private let tabClientId: String
     private lazy var remoteClient = RemoteAPIClient()
     private lazy var localEngine = BookingEngine()
 
-    init(settings: AppSettings) {
+    init(settings: AppSettings, commandCenter: WebViewCommandCenter) {
         self.settings = settings
+        self.commandCenter = commandCenter
+        self.tabClientId = UUID().uuidString.lowercased()
         super.init()
     }
 
@@ -20,7 +24,7 @@ class WebViewBridge: NSObject, WKScriptMessageHandler {
                body["event"] as? String == "status" {
                 let running = body["running"] as? Bool ?? false
                 let waiting = body["waiting_for_schedule"] as? Bool ?? false
-                WebViewCommandCenter.shared.updateRunning(running || waiting)
+                commandCenter?.updateRunning(running || waiting)
             }
             return
         }
@@ -46,10 +50,10 @@ class WebViewBridge: NSObject, WKScriptMessageHandler {
                 path: path,
                 method: method,
                 body: body,
-                clientId: settings.clientId
+                clientId: tabClientId
             )
         case .local:
-            return try await localEngine.handle(path: path, method: method, body: body, clientId: settings.clientId)
+            return try await localEngine.handle(path: path, method: method, body: body, clientId: tabClientId)
         }
     }
 

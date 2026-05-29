@@ -2,8 +2,6 @@ import SwiftUI
 import WebKit
 
 final class WebViewCommandCenter: ObservableObject {
-    static let shared = WebViewCommandCenter()
-
     @Published var isRunning = false
     weak var webView: WKWebView?
 
@@ -42,9 +40,10 @@ final class WebViewCommandCenter: ObservableObject {
 
 struct BookingWebView: UIViewRepresentable {
     @EnvironmentObject var settings: AppSettings
+    @ObservedObject var commandCenter: WebViewCommandCenter
 
     func makeCoordinator() -> WebViewBridge {
-        WebViewBridge(settings: settings)
+        WebViewBridge(settings: settings, commandCenter: commandCenter)
     }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -76,7 +75,7 @@ struct BookingWebView: UIViewRepresentable {
         webView.scrollView.maximumZoomScale = 1.0
         webView.scrollView.minimumZoomScale = 1.0
         context.coordinator.webView = webView
-        WebViewCommandCenter.shared.webView = webView
+        commandCenter.webView = webView
 
         loadLocalHTML(webView)
         return webView
@@ -84,6 +83,7 @@ struct BookingWebView: UIViewRepresentable {
 
     func updateUIView(_ webView: WKWebView, context: Context) {
         context.coordinator.settings = settings
+        context.coordinator.commandCenter = commandCenter
     }
 
     private func loadLocalHTML(_ webView: WKWebView) {

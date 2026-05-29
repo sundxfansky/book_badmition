@@ -2,21 +2,21 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var settings: AppSettings
-    @StateObject private var commandCenter = WebViewCommandCenter.shared
+    @StateObject private var commandCenter = WebViewCommandCenter()
     @State private var showSettings = false
 
     var body: some View {
         NavigationStack {
-            BookingWebView()
+            BookingWebView(commandCenter: commandCenter)
                 .environmentObject(settings)
                 .navigationTitle("羽毛球抢票")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItemGroup(placement: .topBarLeading) {
-                        Button(action: { WebViewCommandCenter.shared.previousTab() }) {
+                        Button(action: { commandCenter.previousTab() }) {
                             Image(systemName: "chevron.left")
                         }
-                        Button(action: { WebViewCommandCenter.shared.nextTab() }) {
+                        Button(action: { commandCenter.nextTab() }) {
                             Image(systemName: "chevron.right")
                         }
                     }
