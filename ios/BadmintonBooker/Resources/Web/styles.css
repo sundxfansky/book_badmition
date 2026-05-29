@@ -649,6 +649,11 @@ textarea {
   background: #fff;
   color: var(--muted);
   font-weight: 700;
+  white-space: nowrap;
+  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .schedule-cell {

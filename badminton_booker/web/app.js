@@ -330,7 +330,7 @@ function renderScheduleGrid() {
   const times = allTimes();
   const monitorMode = $("monitorEnabledInput").checked;
   updateMonitorControls();
-  grid.style.gridTemplateColumns = `84px repeat(${courts.length}, minmax(58px, 1fr))`;
+  grid.style.gridTemplateColumns = `92px repeat(${courts.length}, minmax(58px, 1fr))`;
   grid.innerHTML = "";
 
   grid.appendChild(cell("时间 / 场地", "schedule-head schedule-corner"));
@@ -933,7 +933,7 @@ function getOrCreateClientId() {
 
 function defaultDate() {
   const d = new Date();
-  d.setDate(d.getDate() + 7);
+  d.setDate(d.getDate() + 1);
   const pad = (v) => String(v).padStart(2, "0");
   return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())}`;
 }
@@ -969,8 +969,13 @@ function applyTemplate(date, timeStartHours, mode, btnId) {
 
   $("pairModeInput").checked = mode === "pair";
 
+  s.siteStatusQueried = false;
+  s.siteListSnapshot = null;
+  s.monitorCells = [];
+
   renderChoices();
   preview();
+  autoQuerySiteStatus();
 }
 
 // --- Event listeners ---

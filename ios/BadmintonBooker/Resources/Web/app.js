@@ -330,7 +330,7 @@ function renderScheduleGrid() {
   const times = allTimes();
   const monitorMode = $("monitorEnabledInput").checked;
   updateMonitorControls();
-  grid.style.gridTemplateColumns = `84px repeat(${courts.length}, minmax(58px, 1fr))`;
+  grid.style.gridTemplateColumns = `92px repeat(${courts.length}, minmax(58px, 1fr))`;
   grid.innerHTML = "";
 
   grid.appendChild(cell("时间 / 场地", "schedule-head schedule-corner"));
