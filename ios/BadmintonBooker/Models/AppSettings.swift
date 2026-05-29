@@ -23,8 +23,8 @@ class AppSettings: ObservableObject {
     @Published var clientId: String
 
     init() {
-        let savedMode = UserDefaults.standard.string(forKey: "app_mode") ?? "remote"
-        self.mode = AppMode(rawValue: savedMode) ?? .remote
+        let savedMode = UserDefaults.standard.string(forKey: "app_mode") ?? "local"
+        self.mode = AppMode(rawValue: savedMode) ?? .local
         self.serverURL = UserDefaults.standard.string(forKey: "server_url") ?? ""
 
         if let saved = UserDefaults.standard.string(forKey: "client_id"), !saved.isEmpty {

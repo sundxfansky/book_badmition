@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, unquote, urlparse, urlunparse
 
-from .venue_defaults import FIXED_COURTS, FIXED_SOURCE_DATE, FIXED_TIME_SLOTS
+from .venue_defaults import FIXED_COURTS, FIXED_TIME_SLOTS, default_date
 
 
 SUBMIT_PATH = "/v2/reserve/submit?"
@@ -210,7 +210,7 @@ class CaptureStore:
         if not dates and params.get("date"):
             dates = [params["date"]]
         if not dates:
-            dates = [self.submit_body().get("venues_date", "")]
+            dates = [self.submit_body().get("venues_date", "") or default_date()]
 
         requests = []
         for date in dates:
@@ -224,7 +224,7 @@ class CaptureStore:
         if not dates and params.get("date"):
             dates = [params["date"]]
         if not dates:
-            dates = [self.submit_body().get("venues_date", "")]
+            dates = [self.submit_body().get("venues_date", "") or default_date()]
 
         mode = params.get("request_mode", "single")
         groups = _selection_groups(selections, mode)
@@ -358,7 +358,7 @@ def _time_from_fixed_item(item: dict) -> TimeOption:
         end_timestamp=int(item.get("end_timestamp", 0)),
         price=str(item.get("price", "0")),
         times=str(item.get("times", "1")),
-        source_date=FIXED_SOURCE_DATE,
+        source_date=default_date(),
     )
 
 

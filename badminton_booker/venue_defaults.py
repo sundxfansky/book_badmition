@@ -28,4 +28,8 @@ FIXED_TIME_SLOTS = [
     {"start_time": "21:00", "end_time": "22:00", "start_timestamp": 1779973200, "end_timestamp": 1779976800, "price": "130", "times": "1"},
 ]
 
-FIXED_SOURCE_DATE = "2026/05/28"
+
+
+def default_date():
+    from datetime import date, timedelta
+    return (date.today() + timedelta(days=1)).strftime("%Y/%m/%d")

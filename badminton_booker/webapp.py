@@ -7,7 +7,7 @@ import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from html import escape
 from pathlib import Path
@@ -22,6 +22,7 @@ from .capture import (
     site_list_snapshot_to_dict,
     snapshot_to_dict,
 )
+from .venue_defaults import default_date
 from .http_client import send_request
 
 
@@ -76,10 +77,10 @@ class BookingWebApp:
             "max_attempts": 100000,
             "schedule_enabled": False,
             "scheduled_start_at": "",
-            "date": snapshot.date,
-            "dates": [snapshot.date],
+            "date": default_date(),
+            "dates": [default_date()],
             "monitor_enabled": False,
-            "monitor_date": snapshot.date,
+            "monitor_date": default_date(),
             "monitor_interval_seconds": 20,
             "monitor_selections": [],
             "courts": [
@@ -99,6 +100,7 @@ class BookingWebApp:
         state = self.state_for(client_id)
         snapshot = self.capture.venue_snapshot()
         return {
+            "version": "1.2.0",
             "snapshot": snapshot_to_dict(snapshot),
             "site_list_snapshot": site_list_snapshot_to_dict(self.capture.latest_site_list_entry()),
             "params": _without_wx_token(state.params),
@@ -1491,8 +1493,8 @@ def _parse_scheduled_datetime(value: str) -> datetime:
         "%Y/%m/%d %H:%M",
     ]
     if len(text.split()) == 1 and ":" in text:
-        today = datetime.now().strftime("%Y-%m-%d")
-        text = f"{today} {text}"
+        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+        text = f"{tomorrow} {text}"
     for fmt in formats + ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"]:
         try:
             return datetime.strptime(text, fmt)
@@ -1587,7 +1589,7 @@ def _admin_main_time(params: dict) -> str:
 def _admin_form_to_params(snapshot, current: dict, form: dict[str, list[str]], wx_token: str) -> dict:
     dates = _unique_dates([item.strip().replace("-", "/") for item in _form_value(form, "dates", "").split(",")])
     if not dates:
-        date = _form_value(form, "date", str(current.get("date") or snapshot.date)).strip().replace("-", "/")
+        date = _form_value(form, "date", str(current.get("date") or snapshot.date or default_date())).strip().replace("-", "/")
         dates = [date] if date else []
 
     courts_by_id = {str(court.site_id): court.__dict__ for court in snapshot.courts}
@@ -1843,7 +1845,7 @@ def _admin_task_card(task: dict, snapshot, backends: list[dict] | None = None, b
           <input name="wx_token" value="{escape(task.get('wx_token') or '')}" autocomplete="off" />
         </label>
         <label>日期（逗号分隔）
-          <input name="dates" value="{escape(dates)}" placeholder="2026/05/28,2026/05/29" />
+          <input name="dates" value="{escape(dates)}" placeholder="YYYY/MM/DD,YYYY/MM/DD" />
         </label>
         <label>轮询间隔秒
           <input name="interval_seconds" type="number" min="0.1" step="0.1" value="{escape(str(params.get('interval_seconds') or 0.1))}" />
@@ -1858,7 +1860,7 @@ def _admin_task_card(task: dict, snapshot, backends: list[dict] | None = None, b
           <input name="brand_code" value="{escape(str(headers.get('brand-code') or ''))}" />
         </label>
         <label>定时启动时间
-          <input name="scheduled_start_at" value="{escape(str(params.get('scheduled_start_at') or ''))}" placeholder="2026-05-28 09:59:59" />
+          <input name="scheduled_start_at" value="{escape(str(params.get('scheduled_start_at') or ''))}" placeholder="YYYY-MM-DD HH:MM:SS" />
         </label>
         <label>监听间隔秒
           <input name="monitor_interval_seconds" type="number" min="1" step="1" value="{escape(str(params.get('monitor_interval_seconds') or 20))}" />

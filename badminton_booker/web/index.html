@@ -4,16 +4,16 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
     <title>羽毛球抢票控制台</title>
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles.css?v=1.2.0" />
   </head>
   <body>
     <header class="topbar">
       <div>
-        <h1>羽毛球抢票控制台</h1>
+        <h1>羽毛球抢票控制台 <small id="versionTag"></small></h1>
         <p id="subtitle">加载中...</p>
       </div>
       <div class="actions">
-
+        <button id="refreshBtn" class="icon-btn" title="刷新">&#8635;</button>
         <button id="checkTokenBtn">检查Token</button>
         <button id="startBtn" class="primary">开始</button>
         <button id="stopBtn" class="danger">停止</button>
@@ -115,6 +115,6 @@
       </section>
     </main>
 
-    <script src="app.js"></script>
+    <script src="app.js?v=1.2.0"></script>
   </body>
 </html>

@@ -1,5 +1,11 @@
+const APP_VERSION = "1.2.0";
+
 const TABS_CACHE_KEY = "badminton_booker.tabs";
-const WX_TOKEN_CACHE_KEY = "badminton_booker.wx_token";
+const WX_TOKEN_GLOBAL_KEY = "badminton_booker.wx_token";
+
+function wxTokenCacheKey(clientId) {
+  return `badminton_booker.wx_token.${clientId}`;
+}
 
 const $ = (id) => document.getElementById(id);
 
@@ -130,27 +136,25 @@ function switchTab(tabId) {
   if (tab) {
     restoreTabUI(tab);
     renderTabs();
-    bootTab(tab);
+    startPolling(tab);
+    refreshStatus();
   }
 }
 
 function saveCurrentTabUI() {
   const tab = activeTab();
   if (!tab) return;
-  tab.state.selectedDates = activeState().selectedDates;
-  tab.state.selectedCells = activeState().selectedCells;
-  tab.state.monitorCells = activeState().monitorCells;
-  tab.state.previewPinned = activeState().previewPinned;
-  tab.state.logs = activeState().logs;
+  tab.state.params = currentParams();
 }
 
 function restoreTabUI(tab) {
   const s = tab.state;
   if (s.params) {
-    applyParams(s.params);
+    applyParams(s.params, { preferParamsToken: true });
   }
   renderChoices();
   renderStatus({ running: s.running, waiting_for_schedule: s.waitingForSchedule, logs: s.logs, last_request: null });
+  scheduleTokenCheck();
 }
 
 function renderTabs() {
@@ -166,6 +170,13 @@ function renderTabs() {
     const label = document.createElement("span");
     label.textContent = tabSummary(tab, tabs.indexOf(tab));
     btn.appendChild(label);
+    if (tabs.length > 1) {
+      const close = document.createElement("span");
+      close.className = "tab-close";
+      close.textContent = "×";
+      close.addEventListener("click", (e) => closeTab(tab.id, e));
+      btn.appendChild(close);
+    }
     btn.addEventListener("click", () => switchTab(tab.id));
     container.appendChild(btn);
   }
@@ -192,6 +203,27 @@ function switchRelativeTab(delta) {
   const currentIndex = Math.max(0, tabs.findIndex((t) => t.id === activeTabId));
   const nextIndex = (currentIndex + delta + tabs.length) % tabs.length;
   switchTab(tabs[nextIndex].id);
+}
+
+function closeTab(tabId, event) {
+  if (event) event.stopPropagation();
+  if (tabs.length <= 1) return;
+  const tabIndex = tabs.findIndex((t) => t.id === tabId);
+  if (tabIndex < 0) return;
+  const tab = tabs[tabIndex];
+  stopPolling(tab);
+  clearCachedWxToken(tab.clientId);
+  tabs.splice(tabIndex, 1);
+  if (activeTabId === tabId) {
+    const newIndex = Math.min(tabIndex, tabs.length - 1);
+    activeTabId = tabs[newIndex].id;
+    const newTab = activeTab();
+    restoreTabUI(newTab);
+    startPolling(newTab);
+    refreshStatus();
+  }
+  saveTabs();
+  renderTabs();
 }
 
 // --- PLACEHOLDER_PARAMS_AND_RENDER ---
@@ -263,24 +295,28 @@ function applyParams(params, options = {}) {
 // --- PLACEHOLDER_CACHE ---
 
 function cacheWxToken() {
+  const tab = activeTab();
+  if (!tab) return;
   const token = $("wxTokenInput").value.trim();
   if (token) {
-    setCachedWxToken(token);
+    setCachedWxToken(token, tab.clientId);
   } else {
-    clearCachedWxToken();
+    clearCachedWxToken(tab.clientId);
   }
 }
 
 function getCachedWxToken() {
-  try { return window.localStorage?.getItem(WX_TOKEN_CACHE_KEY) || ""; } catch { return ""; }
+  const tab = activeTab();
+  if (!tab) return "";
+  try { return window.localStorage?.getItem(wxTokenCacheKey(tab.clientId)) || ""; } catch { return ""; }
 }
 
-function setCachedWxToken(token) {
-  try { window.localStorage?.setItem(WX_TOKEN_CACHE_KEY, token); } catch {}
+function setCachedWxToken(token, clientId) {
+  try { window.localStorage?.setItem(wxTokenCacheKey(clientId), token); } catch {}
 }
 
-function clearCachedWxToken() {
-  try { window.localStorage?.removeItem(WX_TOKEN_CACHE_KEY); } catch {}
+function clearCachedWxToken(clientId) {
+  try { window.localStorage?.removeItem(wxTokenCacheKey(clientId)); } catch {}
 }
 
 function defaultSelections(params) {
@@ -839,6 +875,8 @@ function setupLogResize() {
 async function bootTab(tab) {
   try {
     const metadata = await apiForTab(tab, "/api/metadata");
+    const serverVersion = metadata.version || APP_VERSION;
+    if ($("versionTag")) $("versionTag").textContent = `v${serverVersion}`;
     tab.state.snapshot = metadata.snapshot;
     tab.state.siteListSnapshot = null;
     applyParams(metadata.params);
@@ -890,7 +928,20 @@ async function refreshStatus() {
   renderTabs();
 }
 
+async function refreshAll() {
+  const btn = $("refreshBtn");
+  btn.classList.add("spinning");
+  btn.disabled = true;
+  try {
+    await bootTab(activeTab());
+  } finally {
+    btn.classList.remove("spinning");
+    btn.disabled = false;
+  }
+}
+
 async function boot() {
+  migrateGlobalWxTokenCache();
   const saved = loadTabs();
   if (saved && saved.tabs && saved.tabs.length) {
     for (const entry of saved.tabs) {
@@ -924,6 +975,23 @@ function getOrCreateClientId() {
   } catch {
     return "default";
   }
+}
+
+function migrateGlobalWxTokenCache() {
+  try {
+    const globalToken = window.localStorage?.getItem(WX_TOKEN_GLOBAL_KEY);
+    if (!globalToken) return;
+    const saved = loadTabs();
+    if (saved && saved.tabs) {
+      for (const entry of saved.tabs) {
+        const key = wxTokenCacheKey(entry.clientId);
+        if (!window.localStorage?.getItem(key)) {
+          window.localStorage?.setItem(key, globalToken);
+        }
+      }
+    }
+    window.localStorage?.removeItem(WX_TOKEN_GLOBAL_KEY);
+  } catch {}
 }
 
 // --- Templates ---
@@ -978,6 +1046,7 @@ function applyTemplate(date, timeStartHours, mode, btnId) {
 // --- Event listeners ---
 
 $("checkTokenBtn").addEventListener("click", checkToken);
+$("refreshBtn").addEventListener("click", refreshAll);
 
 $("startBtn").addEventListener("click", start);
 $("stopBtn").addEventListener("click", stop);
@@ -1015,6 +1084,7 @@ for (const id of ["intervalInput", "maxAttemptsInput", "dryRunInput", "scheduled
 $("scheduleEnabledInput").addEventListener("change", () => {
   if ($("scheduleEnabledInput").checked) {
     const now = new Date();
+    now.setDate(now.getDate() + 1);
     const pad = (v) => String(v).padStart(2, "0");
     $("scheduledStartInput").value = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T23:59:30`;
   }

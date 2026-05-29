@@ -49,8 +49,8 @@ class BookingEngine {
         let defaults = VenueDefaults.shared
         let snapshot: [String: Any] = [
             "venues_id": "",
-            "date": defaults.sourceDate,
-            "dates": [defaults.sourceDate],
+            "date": defaults.defaultDate,
+            "dates": [defaults.defaultDate],
             "courts": defaults.courts.map { ["site_id": $0.siteId, "site_name": $0.siteName] },
             "times": defaults.timeSlots.map { $0.toDict() },
             "selected_site_id": defaults.courts.first?.siteId ?? 0,
@@ -58,11 +58,24 @@ class BookingEngine {
             "fixed_courts": defaults.courts.map { ["site_id": $0.siteId, "site_name": $0.siteName] },
             "selected_times": [],
         ]
+        let state = stateFor(clientId)
+        let savedParams = state.lock.withLock { state.params }
+        let params = savedParams.isEmpty ? defaultParams() : withoutWxToken(savedParams)
         return [
+            "version": "1.1.0",
             "snapshot": snapshot,
             "site_list_snapshot": NSNull(),
-            "params": defaultParams(),
+            "params": params,
         ]
+    }
+
+    private func withoutWxToken(_ params: [String: Any]) -> [String: Any] {
+        var clean = params
+        if var headers = clean["headers"] as? [String: Any] {
+            headers.removeValue(forKey: "wx-token")
+            clean["headers"] = headers
+        }
+        return clean
     }
 
     private func defaultParams() -> [String: Any] {
@@ -75,10 +88,10 @@ class BookingEngine {
             "max_attempts": 100000,
             "schedule_enabled": false,
             "scheduled_start_at": "",
-            "date": defaults.sourceDate,
-            "dates": [defaults.sourceDate],
+            "date": defaults.defaultDate,
+            "dates": [defaults.defaultDate],
             "monitor_enabled": false,
-            "monitor_date": defaults.sourceDate,
+            "monitor_date": defaults.defaultDate,
             "monitor_interval_seconds": 20,
             "monitor_selections": [] as [[String: Any]],
             "courts": [["site_id": defaults.courts.first?.siteId ?? 0, "site_name": defaults.courts.first?.siteName ?? ""]],
@@ -86,7 +99,6 @@ class BookingEngine {
             "headers": [
                 "shop-id": templateHeaders["shop-id"] ?? "",
                 "brand-code": templateHeaders["brand-code"] ?? "",
-                "wx-token": templateHeaders["wx-token"] ?? "",
             ],
         ]
     }
@@ -94,9 +106,10 @@ class BookingEngine {
     private func status(clientId: String) -> [String: Any] {
         let state = stateFor(clientId)
         return state.lock.withLock {
-            [
+            let params = state.params.isEmpty ? defaultParams() : withoutWxToken(state.params)
+            return [
                 "running": state.running,
-                "params": state.params.isEmpty ? defaultParams() : state.params,
+                "params": params,
                 "logs": Array(state.logs.suffix(300)),
                 "last_request": state.lastRequest ?? NSNull(),
                 "last_response": state.lastResponse ?? NSNull(),
@@ -574,7 +587,7 @@ class BookingEngine {
     }
 
     private func siteListSnapshot(from payload: [String: Any], params: [String: Any]) -> [String: Any] {
-        let date = params["monitor_date"] as? String ?? params["date"] as? String ?? VenueDefaults.shared.sourceDate
+        let date = params["monitor_date"] as? String ?? params["date"] as? String ?? VenueDefaults.shared.defaultDate
         let data = payload["data"] as? [String: Any] ?? [:]
         let courts = data["list"] as? [[String: Any]] ?? []
         var items: [[String: Any]] = []
@@ -652,7 +665,7 @@ class BookingEngine {
 
     private func mockSiteListSnapshot(params: [String: Any]) -> [String: Any] {
         let defaults = VenueDefaults.shared
-        let date = params["monitor_date"] as? String ?? params["date"] as? String ?? defaults.sourceDate
+        let date = params["monitor_date"] as? String ?? params["date"] as? String ?? defaults.defaultDate
         var items: [[String: Any]] = []
         for (courtIndex, court) in defaults.courts.enumerated() {
             let courtDict: [String: Any] = ["site_id": court.siteId, "site_name": court.siteName]

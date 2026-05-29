@@ -3,7 +3,12 @@ import Foundation
 struct VenueDefaults {
     static let shared = VenueDefaults()
 
-    let sourceDate = "2026/05/28"
+    var defaultDate: String {
+        let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: Date())!
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy/MM/dd"
+        return formatter.string(from: tomorrow)
+    }
 
     let courts: [CourtInfo] = [
         CourtInfo(siteId: 3692729935134806, siteName: "1号场"),
@@ -57,7 +62,7 @@ struct TimeSlotInfo {
             "end_timestamp": endTimestamp,
             "price": price,
             "times": times,
-            "source_date": VenueDefaults.shared.sourceDate,
+            "source_date": VenueDefaults.shared.defaultDate,
         ]
     }
 }

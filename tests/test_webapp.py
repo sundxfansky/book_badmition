@@ -1,10 +1,20 @@
 import unittest
+from datetime import date, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import badminton_booker.webapp as webapp
 from badminton_booker.webapp import BookingWebApp, _admin_page
+from badminton_booker.venue_defaults import default_date
+
+
+def _tomorrow():
+    return default_date()
+
+
+def _day_after(days=1):
+    return (date.today() + timedelta(days=days + 1)).strftime("%Y/%m/%d")
 
 
 class BookingWebAppTest(unittest.TestCase):
@@ -67,7 +77,7 @@ class BookingWebAppTest(unittest.TestCase):
             "client-a",
             {
                 "headers": {"wx-token": "token-a"},
-                "dates": ["2026/05/28"],
+                "dates": [_tomorrow()],
                 "selections": [
                     {
                         "court": {"site_id": 3692729935134806, "site_name": "1号场"},
@@ -88,7 +98,7 @@ class BookingWebAppTest(unittest.TestCase):
         self.assertEqual(exported["params"]["headers"]["wx-token"], "token-a")
 
         imported = app.admin_import(
-            '{"client_id":"client-b","params":{"dates":["2026/05/29"],"headers":{"wx-token":"token-b"},"selections":[]}}'
+            f'{{"client_id":"client-b","params":{{"dates":["{_day_after(1)}"],"headers":{{"wx-token":"token-b"}},"selections":[]}}}}'
         )
         self.assertEqual(imported["imported"], ["client-b"])
         self.assertEqual(app.admin_snapshot()["tasks"][1]["wx_token"], "token-b")
@@ -97,7 +107,7 @@ class BookingWebAppTest(unittest.TestCase):
             {
                 "client_id": ["client-a"],
                 "wx_token": ["token-c"],
-                "dates": ["2026/05/30"],
+                "dates": [_day_after(2)],
                 "interval_seconds": ["0.2"],
                 "max_attempts": ["50"],
                 "request_mode": ["single"],
@@ -106,7 +116,7 @@ class BookingWebAppTest(unittest.TestCase):
         )
         snapshot = app.admin_snapshot()["tasks"][0]
         self.assertEqual(snapshot["wx_token"], "token-c")
-        self.assertEqual(snapshot["params"]["dates"], ["2026/05/30"])
+        self.assertEqual(snapshot["params"]["dates"], [_day_after(2)])
         self.assertEqual(snapshot["params"]["interval_seconds"], 0.2)
         self.assertEqual(snapshot["params"]["max_attempts"], 50)
         self.assertEqual(snapshot["params"]["selections"][0]["court"]["site_name"], "4号场")
@@ -114,7 +124,7 @@ class BookingWebAppTest(unittest.TestCase):
 
     def test_admin_task_name_uses_date_court_count_and_main_time(self) -> None:
         params = {
-            "dates": ["2026/05/28"],
+            "dates": [_tomorrow()],
             "selections": [
                 {
                     "court": {"site_id": 1, "site_name": "1号场"},
@@ -131,7 +141,7 @@ class BookingWebAppTest(unittest.TestCase):
             ],
         }
 
-        self.assertEqual(webapp._admin_task_name(params), "2026/05/28-2个场地-07:00-08:00")
+        self.assertEqual(webapp._admin_task_name(params), f"{_tomorrow()}-2个场地-07:00-08:00")
 
     def test_admin_page_exposes_import_actions_and_task_controls(self) -> None:
         app = BookingWebApp("request.txt")
@@ -139,7 +149,7 @@ class BookingWebAppTest(unittest.TestCase):
             "client-a",
             {
                 "headers": {"wx-token": "token-a"},
-                "dates": ["2026/05/28"],
+                "dates": [_tomorrow()],
                 "selections": [
                     {
                         "court": {"site_id": 3692729935134806, "site_name": "1号场"},
@@ -158,7 +168,7 @@ class BookingWebAppTest(unittest.TestCase):
 
         html = _admin_page(app, True)
 
-        self.assertIn("2026/05/28-1个场地-07:00-08:00", html)
+        self.assertIn(f"{_tomorrow()}-1个场地-07:00-08:00", html)
         self.assertIn("导入后开启任务", html)
         self.assertIn("导入后停止任务", html)
         self.assertIn('formaction="/sundx/start"', html)
@@ -171,7 +181,7 @@ class BookingWebAppTest(unittest.TestCase):
             "client-a",
             {
                 "headers": {"wx-token": "token-a"},
-                "dates": ["2026/05/28"],
+                "dates": [_tomorrow()],
                 "selections": [],
             },
         )
@@ -187,8 +197,8 @@ class BookingWebAppTest(unittest.TestCase):
     def test_admin_import_action_can_start_or_stop_imported_tasks(self) -> None:
         app = BookingWebApp("request.txt")
         imported = app.admin_import(
-            '{"tasks":[{"client_id":"client-a","params":{"dates":["2026/05/28"],"headers":{"wx-token":"token-a"},"selections":[]}},'
-            '{"client_id":"client-b","params":{"dates":["2026/05/29"],"headers":{"wx-token":"token-b"},"selections":[]}}]}'
+            f'{{"tasks":[{{"client_id":"client-a","params":{{"dates":["{_tomorrow()}"],"headers":{{"wx-token":"token-a"}},"selections":[]}}}},'
+            f'{{"client_id":"client-b","params":{{"dates":["{_day_after(1)}"],"headers":{{"wx-token":"token-b"}},"selections":[]}}}}]}}'
         )
 
         with patch.object(app, "admin_start") as start:
@@ -250,20 +260,21 @@ class BookingWebAppTest(unittest.TestCase):
         self.assertEqual(results, ["企业微信通知已发送"])
 
     def test_success_notification_includes_booking_context(self) -> None:
+        d = _tomorrow()
         message = webapp._success_notification_message(
             {
                 "success_units": 2,
                 "success_targets": [
-                    "2026/05/28 4号场 07:00-08:00",
-                    "2026/05/28 4号场 08:00-09:00",
+                    f"{d} 4号场 07:00-08:00",
+                    f"{d} 4号场 08:00-09:00",
                 ],
             }
         )
 
         self.assertIn("【羽毛球抢票】抢票成功", message)
         self.assertIn("成功时间数：2", message)
-        self.assertIn("2026/05/28 4号场 07:00-08:00", message)
-        self.assertIn("2026/05/28 4号场 08:00-09:00", message)
+        self.assertIn(f"{d} 4号场 07:00-08:00", message)
+        self.assertIn(f"{d} 4号场 08:00-09:00", message)
 
     def test_success_request_sends_sync_notification_at_success_log(self) -> None:
         app = BookingWebApp("request.txt")
@@ -274,10 +285,11 @@ class BookingWebAppTest(unittest.TestCase):
             sent.append(message)
             return "企业微信通知已发送"
 
+        d = _tomorrow()
         params = {
             "dry_run": False,
             "headers": {},
-            "dates": ["2026/05/28"],
+            "dates": [d],
             "selections": [
                 {
                     "court": {"site_id": 3692729935134809, "site_name": "4号场"},
@@ -312,17 +324,18 @@ class BookingWebAppTest(unittest.TestCase):
         self.assertTrue(response["notification_sent"])
         self.assertGreaterEqual(len(sent), 2)
         self.assertIn("【羽毛球抢票】单个请求抢票成功", sent[0])
-        self.assertIn("2026/05/28 4号场 07:00-08:00", sent[0])
+        self.assertIn(f"{d} 4号场 07:00-08:00", sent[0])
         self.assertTrue(any("【羽毛球抢票】已停止当前 wx-token" in item for item in sent))
         self.assertTrue(any("企业微信通知已发送" in line for line in app.status("client-a")["logs"]))
 
     def test_success_units_count_unique_date_court_time(self) -> None:
+        d = _tomorrow()
         successful_slot_keys = set()
         first = {
             "success": True,
             "request": {
                 "body": {
-                    "venues_date": "2026/05/28",
+                    "venues_date": d,
                     "venues_site_time": [
                         {"site_id": 1, "start_time": "08:00", "end_time": "09:00"},
                         {"site_id": 2, "start_time": "08:00", "end_time": "09:00"},
@@ -334,7 +347,7 @@ class BookingWebAppTest(unittest.TestCase):
             "success": True,
             "request": {
                 "body": {
-                    "venues_date": "2026/05/28",
+                    "venues_date": d,
                     "venues_site_time": [
                         {"site_id": 1, "start_time": "08:00", "end_time": "09:00"},
                     ],
@@ -345,7 +358,7 @@ class BookingWebAppTest(unittest.TestCase):
             "success": True,
             "request": {
                 "body": {
-                    "venues_date": "2026/05/28",
+                    "venues_date": d,
                     "venues_site_time": [
                         {"site_id": 1, "start_time": "09:00", "end_time": "10:00"},
                     ],
@@ -359,7 +372,7 @@ class BookingWebAppTest(unittest.TestCase):
 
     def test_required_success_units_match_selected_slots(self) -> None:
         params = {
-            "dates": ["2026/06/01"],
+            "dates": [_day_after(3)],
             "selections": [
                 {
                     "court": {"site_id": 1},
@@ -383,7 +396,7 @@ class BookingWebAppTest(unittest.TestCase):
         params = {
             "dry_run": False,
             "headers": {},
-            "dates": ["2026/06/01"],
+            "dates": [_day_after(3)],
             "selections": [
                 {
                     "court": {"site_id": 3692729935134806, "site_name": "1号场"},
@@ -418,10 +431,11 @@ class BookingWebAppTest(unittest.TestCase):
         app = BookingWebApp("request.txt")
         state = app.state_for("client-a")
         sent = []
+        d = _tomorrow()
         params = {
             "dry_run": True,
             "headers": {},
-            "dates": ["2026/05/28"],
+            "dates": [d],
             "monitor_selections": [
                 {
                     "court": {"site_id": 3692729935134806, "site_name": "1号场"},
@@ -464,17 +478,19 @@ class BookingWebAppTest(unittest.TestCase):
 
         self.assertTrue(response["success"])
         self.assertEqual(response["success_units"], 1)
-        self.assertEqual(response["success_targets"], ["2026/05/28 1号场 09:00-10:00"])
+        self.assertEqual(response["success_targets"], [f"{d} 1号场 09:00-10:00"])
         self.assertTrue(any("监听下单第 1 个请求（成功）" in line for line in state.logs))
         self.assertTrue(any("【羽毛球抢票】dry-run 单个请求成功" in item for item in sent))
 
     def test_monitor_preview_shows_site_list_and_submit_requests(self) -> None:
         app = BookingWebApp("request.txt")
+        d = _tomorrow()
         preview = app.preview(
             "client-a",
             {
                 "monitor_enabled": True,
-                "dates": ["2026/05/28"],
+                "dates": [d],
+                "monitor_date": d,
                 "monitor_selections": [
                     {
                         "court": {"site_id": 3692729935134806, "site_name": "1号场"},
@@ -493,11 +509,12 @@ class BookingWebAppTest(unittest.TestCase):
 
         self.assertEqual(preview["mode"], "monitor")
         self.assertIn("venues_site_list", preview["requests"][0]["url"])
-        self.assertEqual(preview["monitor_targets"], ["2026/05/28 1号场 09:00-10:00"])
+        self.assertEqual(preview["monitor_targets"], [f"{d} 1号场 09:00-10:00"])
         self.assertEqual(len(preview["submit_requests_when_released"]), 1)
 
     def test_site_status_returns_live_snapshot(self) -> None:
         app = BookingWebApp("request.txt")
+        d = _tomorrow()
         payload = {
             "code": 0,
             "data": {
@@ -533,7 +550,7 @@ class BookingWebAppTest(unittest.TestCase):
             response = app.site_status(
                 "client-a",
                 {
-                    "monitor_date": "2026/05/28",
+                    "monitor_date": d,
                     "headers": {"wx-token": "token-a"},
                 },
             )
@@ -541,7 +558,7 @@ class BookingWebAppTest(unittest.TestCase):
         self.assertTrue(response["success"])
         self.assertEqual(response["available_count"], 1)
         self.assertEqual(response["occupied_count"], 1)
-        self.assertEqual(response["snapshot"]["date"], "2026/05/28")
+        self.assertEqual(response["snapshot"]["date"], d)
         self.assertTrue(response["snapshot"]["items"][0]["available"])
         self.assertFalse(response["snapshot"]["items"][1]["available"])
         self.assertEqual(response["snapshot"]["items"][1]["member_name"], "张三")
@@ -553,11 +570,12 @@ class BookingWebAppTest(unittest.TestCase):
         app = BookingWebApp("request.txt")
         state = app.state_for("client-a")
         calls = []
+        d = _tomorrow()
         params = {
             "dry_run": True,
             "monitor_interval_seconds": 20,
             "max_attempts": 2,
-            "monitor_date": "2026/05/28",
+            "monitor_date": d,
             "monitor_selections": [
                 {
                     "court": {"site_id": 3692729935134806, "site_name": "1号场"},

@@ -100,7 +100,7 @@ struct BookingWebView: UIViewRepresentable {
         let requestId = 0;
 
         window._nativeBridge = {
-            call: function(path, method, body) {
+            call: function(path, method, body, clientId) {
                 return new Promise(function(resolve, reject) {
                     const id = ++requestId;
                     pendingRequests[id] = { resolve, reject };
@@ -108,7 +108,8 @@ struct BookingWebView: UIViewRepresentable {
                         id: id,
                         path: path,
                         method: method,
-                        body: body
+                        body: body,
+                        client_id: clientId || ""
                     });
                 });
             },
@@ -136,7 +137,8 @@ struct BookingWebView: UIViewRepresentable {
                     body = typeof init.body === 'string' ? init.body : JSON.stringify(init.body);
                 }
                 const headers = (init && init.headers) || {};
-                return window._nativeBridge.call(url, method, body).then(function(data) {
+                const clientId = headers["x-client-id"] || "";
+                return window._nativeBridge.call(url, method, body, clientId).then(function(data) {
                     return new Response(JSON.stringify(data), {
                         status: 200,
                         headers: { 'Content-Type': 'application/json' }

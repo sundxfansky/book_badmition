@@ -14,7 +14,7 @@ class RequestBuilder {
             return buildSelectionRequests(template: template, params: params, selections: selections)
         }
 
-        let dates = (params["dates"] as? [String]) ?? [params["date"] as? String ?? VenueDefaults.shared.sourceDate]
+        let dates = (params["dates"] as? [String]) ?? [params["date"] as? String ?? VenueDefaults.shared.defaultDate]
         let courts = params["courts"] as? [[String: Any]] ?? []
         let timeSlots = params["time_slots"] as? [[String: Any]] ?? []
 
@@ -31,7 +31,7 @@ class RequestBuilder {
     }
 
     private func buildSelectionRequests(template: RequestTemplate, params: [String: Any], selections: [[String: Any]]) -> [[String: Any]] {
-        let dates = (params["dates"] as? [String]) ?? [params["date"] as? String ?? VenueDefaults.shared.sourceDate]
+        let dates = (params["dates"] as? [String]) ?? [params["date"] as? String ?? VenueDefaults.shared.defaultDate]
         let mode = params["request_mode"] as? String ?? "single"
         let groups = selectionGroups(selections: selections, mode: mode)
 
@@ -92,7 +92,7 @@ class RequestBuilder {
         let template = loadTemplate()
         guard let baseURL = template.siteListURL else { return nil }
 
-        let date = params["monitor_date"] as? String ?? params["date"] as? String ?? VenueDefaults.shared.sourceDate
+        let date = params["monitor_date"] as? String ?? params["date"] as? String ?? VenueDefaults.shared.defaultDate
         let url = replaceDateInURL(baseURL, date: date)
 
         var headers = template.siteListHeaders
@@ -113,7 +113,7 @@ class RequestBuilder {
     private func buildSingleRequest(template: RequestTemplate, date: String, court: [String: Any], timeSlots: [[String: Any]], params: [String: Any]) -> [String: Any] {
         let siteId = court["site_id"] ?? 0
         let siteName = court["site_name"] as? String ?? ""
-        let sourceDate = VenueDefaults.shared.sourceDate
+        let sourceDate = VenueDefaults.shared.defaultDate
 
         var body = template.submitBody
         body["venues_date"] = date

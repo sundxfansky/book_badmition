@@ -28,13 +28,17 @@ class WebViewBridge: NSObject, WKScriptMessageHandler {
             }
             return
         }
-        guard let id = body["id"] as? Int else { return }
+        guard let id = (body["id"] as? NSNumber)?.intValue else { return }
 
         let requestBody = body["body"] as? String
+        let clientId: String = {
+            let raw = body["client_id"] as? String ?? ""
+            return raw.isEmpty ? tabClientId : raw
+        }()
 
         Task {
             do {
-                let result = try await handleRequest(path: path, method: method, body: requestBody)
+                let result = try await handleRequest(path: path, method: method, body: requestBody, clientId: clientId)
                 resolveJS(id: id, data: result)
             } catch {
                 rejectJS(id: id, error: error.localizedDescription)
@@ -42,7 +46,7 @@ class WebViewBridge: NSObject, WKScriptMessageHandler {
         }
     }
 
-    private func handleRequest(path: String, method: String, body: String?) async throws -> Any {
+    private func handleRequest(path: String, method: String, body: String?, clientId: String) async throws -> Any {
         switch settings.mode {
         case .remote:
             return try await remoteClient.forward(
@@ -50,10 +54,10 @@ class WebViewBridge: NSObject, WKScriptMessageHandler {
                 path: path,
                 method: method,
                 body: body,
-                clientId: tabClientId
+                clientId: clientId
             )
         case .local:
-            return try await localEngine.handle(path: path, method: method, body: body, clientId: tabClientId)
+            return try await localEngine.handle(path: path, method: method, body: body, clientId: clientId)
         }
     }
 
