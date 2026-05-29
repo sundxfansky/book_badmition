@@ -104,7 +104,14 @@ function api(path, options = {}) {
 
 function saveTabs() {
   try {
-    const data = tabs.map((t) => ({ id: t.id, clientId: t.clientId, cachedParams: t.state.params }));
+    const data = tabs.map((t) => ({
+      id: t.id,
+      clientId: t.clientId,
+      cachedParams: t.state.params,
+      cachedSnapshot: t.state.snapshot,
+      cachedSiteListSnapshot: t.state.siteListSnapshot,
+      cachedSiteStatusQueried: t.state.siteStatusQueried,
+    }));
     window.localStorage?.setItem(TABS_CACHE_KEY, JSON.stringify({ tabs: data, activeTabId }));
   } catch {}
 }
@@ -722,6 +729,7 @@ async function querySiteStatus() {
   );
   s.monitorCells = s.monitorCells.filter((item) => occupiedKeys.has(selectionKey(item.court, item.time_slot)));
   renderChoices();
+  persistTabs();
   await preview();
 }
 
@@ -897,6 +905,7 @@ async function bootTab(tab) {
       setDateField("dateInput", defDate);
     }
     renderChoices();
+    persistTabs();
     await preview();
     await refreshStatus();
     autoQuerySiteStatus();
@@ -957,6 +966,15 @@ async function boot() {
       const tab = { id: entry.id, clientId: entry.clientId, state: createTabState(), pollTimer: null };
       if (entry.cachedParams) {
         tab.state.params = entry.cachedParams;
+      }
+      if (entry.cachedSnapshot) {
+        tab.state.snapshot = entry.cachedSnapshot;
+      }
+      if (entry.cachedSiteListSnapshot) {
+        tab.state.siteListSnapshot = entry.cachedSiteListSnapshot;
+      }
+      if (entry.cachedSiteStatusQueried) {
+        tab.state.siteStatusQueried = entry.cachedSiteStatusQueried;
       }
       tabs.push(tab);
     }
