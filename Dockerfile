@@ -12,6 +12,7 @@ RUN apt-get update \
 
 WORKDIR /app
 
+COPY VERSION ./VERSION
 COPY badminton_booker ./badminton_booker
 COPY request.txt ./request.txt
 COPY config.example.json ./config.example.json

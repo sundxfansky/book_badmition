@@ -5,6 +5,15 @@ class BookingEngine {
     private let statesLock = NSLock()
     private let httpClient = BookingHTTPClient()
 
+    private lazy var appVersion: String = {
+        if let url = Bundle.main.url(forResource: "VERSION", withExtension: nil),
+           let data = try? Data(contentsOf: url),
+           let version = String(data: data, encoding: .utf8) {
+            return version.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return "unknown"
+    }()
+
     func handle(path: String, method: String, body: String?, clientId: String) async throws -> Any {
         let bodyDict: [String: Any]? = {
             guard let body, let data = body.data(using: .utf8),
@@ -62,7 +71,7 @@ class BookingEngine {
         let savedParams = state.lock.withLock { state.params }
         let params = savedParams.isEmpty ? defaultParams() : withoutWxToken(savedParams)
         return [
-            "version": "1.1.0",
+            "version": appVersion,
             "snapshot": snapshot,
             "site_list_snapshot": NSNull(),
             "params": params,

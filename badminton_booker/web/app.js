@@ -1,4 +1,4 @@
-const APP_VERSION = "1.2.0";
+const APP_VERSION = "1.3.0";
 
 const TABS_CACHE_KEY = "badminton_booker.tabs";
 const WX_TOKEN_GLOBAL_KEY = "badminton_booker.wx_token";
@@ -104,9 +104,14 @@ function api(path, options = {}) {
 
 function saveTabs() {
   try {
-    const data = tabs.map((t) => ({ id: t.id, clientId: t.clientId }));
+    const data = tabs.map((t) => ({ id: t.id, clientId: t.clientId, cachedParams: t.state.params }));
     window.localStorage?.setItem(TABS_CACHE_KEY, JSON.stringify({ tabs: data, activeTabId }));
   } catch {}
+}
+
+function persistTabs() {
+  saveCurrentTabUI();
+  saveTabs();
 }
 
 function loadTabs() {
@@ -419,6 +424,7 @@ function toggleCell(court, timeSlot) {
   }
   renderChoices();
   preview();
+  persistTabs();
 }
 
 function toggleMonitorCell(court, timeSlot) {
@@ -430,6 +436,7 @@ function toggleMonitorCell(court, timeSlot) {
   }
   renderChoices();
   preview();
+  persistTabs();
 }
 
 // --- PLACEHOLDER_HELPERS ---
@@ -560,9 +567,9 @@ function toDatetimeLocalValue(value) {
 }
 
 function defaultScheduledStartValue() {
-  const date = new Date(Date.now() + 60 * 1000);
+  const date = new Date();
   const pad = (v) => String(v).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T23:59:30`;
 }
 
 function requestMode() { return $("pairModeInput").checked ? "pair" : "single"; }
@@ -879,7 +886,8 @@ async function bootTab(tab) {
     if ($("versionTag")) $("versionTag").textContent = `v${serverVersion}`;
     tab.state.snapshot = metadata.snapshot;
     tab.state.siteListSnapshot = null;
-    applyParams(metadata.params);
+    const hasCached = !!tab.state.params;
+    applyParams(tab.state.params || metadata.params, { preferParamsToken: hasCached });
     if (!$("scheduledStartInput").value) {
       $("scheduledStartInput").value = defaultScheduledStartValue();
     }
@@ -933,6 +941,7 @@ async function refreshAll() {
   btn.classList.add("spinning");
   btn.disabled = true;
   try {
+    saveCurrentTabUI();
     await bootTab(activeTab());
   } finally {
     btn.classList.remove("spinning");
@@ -946,6 +955,9 @@ async function boot() {
   if (saved && saved.tabs && saved.tabs.length) {
     for (const entry of saved.tabs) {
       const tab = { id: entry.id, clientId: entry.clientId, state: createTabState(), pollTimer: null };
+      if (entry.cachedParams) {
+        tab.state.params = entry.cachedParams;
+      }
       tabs.push(tab);
     }
     activeTabId = saved.activeTabId || tabs[0].id;
@@ -1041,6 +1053,7 @@ function applyTemplate(date, timeStartHours, mode, btnId) {
   renderChoices();
   preview();
   autoQuerySiteStatus();
+  persistTabs();
 }
 
 // --- Event listeners ---
@@ -1065,8 +1078,9 @@ $("clearSelectionBtn").addEventListener("click", () => {
   renderScheduleGrid();
   renderChoices();
   preview();
+  persistTabs();
 });
-$("pairModeInput").addEventListener("change", preview);
+$("pairModeInput").addEventListener("change", () => { preview(); persistTabs(); });
 $("monitorEnabledInput").addEventListener("change", () => {
   const s = activeState();
   if (!$("monitorEnabledInput").checked) {
@@ -1074,21 +1088,22 @@ $("monitorEnabledInput").addEventListener("change", () => {
   }
   renderChoices();
   preview();
+  persistTabs();
 });
 $("clearLogsBtn").addEventListener("click", clearLogs);
 $("autoScrollInput").addEventListener("change", scrollLogsToBottom);
 
 for (const id of ["intervalInput", "maxAttemptsInput", "dryRunInput", "scheduledStartInput", "monitorIntervalInput", "wxTokenInput", "shopIdInput", "brandCodeInput"]) {
-  $(id).addEventListener("change", preview);
+  $(id).addEventListener("change", () => { preview(); persistTabs(); });
 }
 $("scheduleEnabledInput").addEventListener("change", () => {
   if ($("scheduleEnabledInput").checked) {
     const now = new Date();
-    now.setDate(now.getDate() + 1);
     const pad = (v) => String(v).padStart(2, "0");
     $("scheduledStartInput").value = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T23:59:30`;
   }
   preview();
+  persistTabs();
 });
 $("wxTokenInput").addEventListener("input", () => { cacheWxToken(); scheduleTokenCheck(); });
 $("dateInput").addEventListener("change", () => {
@@ -1104,6 +1119,7 @@ $("dateInput").addEventListener("change", () => {
   renderChoices();
   preview();
   autoQuerySiteStatus();
+  persistTabs();
 });
 
 boot().then(() => checkToken()).catch((error) => { $("subtitle").textContent = error.message; });

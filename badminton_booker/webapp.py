@@ -15,6 +15,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 
+from . import __version__
 from .capture import (
     CaptureStore,
     request_summary,
@@ -100,7 +101,7 @@ class BookingWebApp:
         state = self.state_for(client_id)
         snapshot = self.capture.venue_snapshot()
         return {
-            "version": "1.2.0",
+            "version": __version__,
             "snapshot": snapshot_to_dict(snapshot),
             "site_list_snapshot": site_list_snapshot_to_dict(self.capture.latest_site_list_entry()),
             "params": _without_wx_token(state.params),
