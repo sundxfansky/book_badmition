@@ -574,6 +574,7 @@ class BookingWebApp:
         required_success_units = _required_success_units(params)
         try:
             if not self._wait_for_schedule(state, params):
+                self.log(state, "定时启动已取消，任务未执行")
                 return
             if params.get("monitor_enabled"):
                 self._run_monitor_loop(state, params)
@@ -603,6 +604,10 @@ class BookingWebApp:
                     self.log(state, "达到最大尝试次数，任务结束")
                     break
                 time.sleep(max(0.1, float(params.get("interval_seconds") or 0.1)))
+            else:
+                self.log(state, "用户手动停止，任务结束")
+        except Exception as exc:
+            self.log(state, f"任务异常退出：{type(exc).__name__}: {exc}")
         finally:
             with state.lock:
                 state.running = False
@@ -620,19 +625,24 @@ class BookingWebApp:
             return
 
         self.log(state, f"开始监听下单：{len(targets)} 个目标，监听间隔 {interval:g} 秒")
-        while not state.stop_event.is_set():
-            attempt += 1
-            self.log(state, f"第 {attempt} 轮监听场地释放")
-            response = self._send_monitor_round(state, params, targets, successful_slot_keys)
-            with state.lock:
-                state.last_response = response
-            if response.get("success"):
-                self.log(state, "监听下单任务结束")
-                break
-            if max_attempts and attempt >= max_attempts:
-                self.log(state, "达到最大监听次数，任务结束")
-                break
-            state.stop_event.wait(interval)
+        try:
+            while not state.stop_event.is_set():
+                attempt += 1
+                self.log(state, f"第 {attempt} 轮监听场地释放")
+                response = self._send_monitor_round(state, params, targets, successful_slot_keys)
+                with state.lock:
+                    state.last_response = response
+                if response.get("success"):
+                    self.log(state, "监听下单成功，任务结束")
+                    break
+                if max_attempts and attempt >= max_attempts:
+                    self.log(state, f"达到最大监听次数 {max_attempts}，任务结束")
+                    break
+                state.stop_event.wait(interval)
+            else:
+                self.log(state, "用户手动停止监听，任务结束")
+        except Exception as exc:
+            self.log(state, f"监听下单异常退出：{type(exc).__name__}: {exc}")
 
     def _send_monitor_round(
         self,
