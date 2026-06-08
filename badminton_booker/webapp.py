@@ -60,6 +60,8 @@ class BookingWebApp:
         self.admin = AdminAuth(ADMIN_CONFIG_PATH)
         self.backends: list[dict] = self._load_backends()
         self._backend_clients: dict[str, BackendClient] = {}
+        self._token_nicknames: dict[str, str] = {}
+        self._token_nicknames_lock = threading.Lock()
 
     def state_for(self, client_id: str) -> RuntimeState:
         key = client_id.strip() or "default"
@@ -493,6 +495,8 @@ class BookingWebApp:
         member_name = (payload.get("data") or {}).get("info") or {}
         name = str(member_name.get("member_name") or "").strip()
         if name:
+            with self._token_nicknames_lock:
+                self._token_nicknames[token] = name
             return {"success": True, "member_name": name}
         return {"success": False, "member_name": "", "error": "无法提取 member_name"}
 
@@ -860,6 +864,12 @@ class BookingWebApp:
         response["notification_sent"] = True
 
     def notify(self, state: RuntimeState, message: str, sync: bool = False) -> None:
+        token = state.wx_token
+        if token:
+            with self._token_nicknames_lock:
+                nickname = self._token_nicknames.get(token, "")
+            trigger = nickname or token
+            message = f"{message}\n本次由{trigger}触发，token：{token}"
         notify(message, lambda result: self.log(state, result), async_send=not sync)
 
     def _send_request(self, state: RuntimeState, request_data: dict, params: dict) -> dict:
