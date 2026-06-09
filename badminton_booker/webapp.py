@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import hashlib
 import secrets
+import ssl
 import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -32,6 +33,7 @@ ADMIN_PATH = "/sundx"
 ADMIN_CONFIG_PATH = Path(".sundx_admin.json")
 ADMIN_COOKIE_NAME = "sundx_admin_session"
 WECHAT_BOT_WEBHOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=f4086525-5bfb-4c29-8cda-5f70455e2e6b"
+WECHAT_BOT_WEBHOOK_FALLBACK = "https://wx.sdxx.de/cgi-bin/webhook/send?key=f4086525-5bfb-4c29-8cda-5f70455e2e6b"
 
 
 @dataclass
@@ -607,7 +609,7 @@ class BookingWebApp:
                 if max_attempts and attempt >= max_attempts:
                     self.log(state, "达到最大尝试次数，任务结束")
                     break
-                time.sleep(max(0.1, float(params.get("interval_seconds") or 0.1)))
+                time.sleep(max(0.01, float(params.get("interval_seconds") or 0.1)))
             else:
                 self.log(state, "用户手动停止，任务结束")
         except Exception as exc:
@@ -891,8 +893,9 @@ class BookingWebApp:
             if ssl_fallback:
                 self.log(state, "本机证书校验失败，已自动关闭 SSL 校验重试一次")
         except HTTPError as exc:
-            self.log(state, f"HTTP 错误：{exc.code} {exc.reason}")
-            return {"success": False, "error": f"HTTP {exc.code}: {exc.reason}"}
+            body = exc.read().decode("utf-8", errors="replace")[:500]
+            self.log(state, f"HTTP 错误：{exc.code} {exc.reason} {body}")
+            return {"success": False, "error": f"HTTP {exc.code}: {exc.reason}", "body": body}
         except URLError as exc:
             self.log(state, f"网络错误：{exc.reason}")
             return {"success": False, "error": str(exc.reason)}
@@ -922,8 +925,9 @@ class BookingWebApp:
             if ssl_fallback:
                 self.log(state, "本机证书校验失败，已自动关闭 SSL 校验重试一次")
         except HTTPError as exc:
-            self.log(state, f"HTTP 错误：{exc.code} {exc.reason}")
-            return {"success": False, "error": f"HTTP {exc.code}: {exc.reason}"}
+            body = exc.read().decode("utf-8", errors="replace")[:500]
+            self.log(state, f"HTTP 错误：{exc.code} {exc.reason} {body}")
+            return {"success": False, "error": f"HTTP {exc.code}: {exc.reason}", "body": body}
         except URLError as exc:
             self.log(state, f"网络错误：{exc.reason}")
             return {"success": False, "error": str(exc.reason)}
@@ -1150,29 +1154,44 @@ def _send_wechat_notification(message: str) -> str:
         {"msgtype": "text", "text": {"content": message}},
         ensure_ascii=False,
     ).encode("utf-8")
-    request = Request(
-        WECHAT_BOT_WEBHOOK,
-        data=data,
-        headers={"content-type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urlopen(request, timeout=5) as response:
-            raw = response.read().decode("utf-8")
-    except HTTPError as exc:
-        return f"企业微信通知失败：HTTP {exc.code} {exc.reason}"
-    except URLError as exc:
-        return f"企业微信通知失败：{exc.reason}"
-    except TimeoutError:
-        return "企业微信通知失败：请求超时"
 
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError:
-        return f"企业微信通知响应异常：{raw[:200]}"
-    if payload.get("errcode") == 0:
-        return "企业微信通知已发送"
-    return f"企业微信通知失败：{payload.get('errmsg', raw)}"
+    for webhook_url in [WECHAT_BOT_WEBHOOK, WECHAT_BOT_WEBHOOK_FALLBACK]:
+        is_fallback = webhook_url != WECHAT_BOT_WEBHOOK
+        request = Request(
+            webhook_url,
+            data=data,
+            headers={"content-type": "application/json"},
+            method="POST",
+        )
+        try:
+            ctx = ssl._create_unverified_context()
+            with urlopen(request, timeout=5, context=ctx) as response:
+                raw = response.read().decode("utf-8")
+        except HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")[:500]
+            if is_fallback:
+                return f"企业微信通知失败：HTTP {exc.code} {exc.reason} {body}"
+            continue
+        except URLError as exc:
+            if is_fallback:
+                return f"企业微信通知失败：{exc.reason}"
+            continue
+        except TimeoutError:
+            if is_fallback:
+                return "企业微信通知失败：请求超时"
+            continue
+
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            if is_fallback:
+                return f"企业微信通知响应异常：{raw[:200]}"
+            continue
+        if payload.get("errcode") == 0:
+            return "企业微信通知已发送"
+        if is_fallback:
+            return f"企业微信通知失败：{payload.get('errmsg', raw)}"
+    return "企业微信通知失败：主域名和降级域名均不可用"
 
 
 def _notify_result(callback, message: str) -> None:
@@ -1642,7 +1661,7 @@ def _admin_form_to_params(snapshot, current: dict, form: dict[str, list[str]], w
             "verify_ssl": False,
             "schedule_enabled": _form_bool(form, "schedule_enabled"),
             "scheduled_start_at": _form_value(form, "scheduled_start_at", ""),
-            "interval_seconds": _to_number(_form_value(form, "interval_seconds", str(current.get("interval_seconds") or 0.1)), 0.1),
+            "interval_seconds": _to_number(_form_value(form, "interval_seconds", str(current.get("interval_seconds") or 0.1)), 0.01),
             "max_attempts": int(_to_number(_form_value(form, "max_attempts", str(current.get("max_attempts") or 100000)), 100000)),
             "headers": {
                 **(current.get("headers") or {}),
@@ -1869,7 +1888,7 @@ def _admin_task_card(task: dict, snapshot, backends: list[dict] | None = None, b
           <input name="dates" value="{escape(dates)}" placeholder="YYYY/MM/DD,YYYY/MM/DD" />
         </label>
         <label>轮询间隔秒
-          <input name="interval_seconds" type="number" min="0.1" step="0.1" value="{escape(str(params.get('interval_seconds') or 0.1))}" />
+          <input name="interval_seconds" type="number" min="0.01" step="0.01" value="{escape(str(params.get('interval_seconds') or 0.1))}" />
         </label>
         <label>最大尝试次数
           <input name="max_attempts" type="number" min="0" value="{escape(str(params.get('max_attempts') or 100000))}" />

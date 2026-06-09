@@ -60,7 +60,8 @@ class RequestFileProvider(BookingProvider):
                 verify_ssl=self.config.verify_ssl,
             )
         except HTTPError as exc:
-            return BookingResult(False, f"HTTP {exc.code}: {exc.reason}")
+            body = exc.read().decode("utf-8", errors="replace")[:500]
+            return BookingResult(False, f"HTTP {exc.code}: {exc.reason} {body}")
         except URLError as exc:
             return BookingResult(False, f"Network error: {exc.reason}")
 
