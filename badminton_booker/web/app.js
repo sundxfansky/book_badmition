@@ -245,7 +245,7 @@ function currentParams() {
   return {
     dry_run: $("dryRunInput").checked,
     verify_ssl: false,
-    interval_seconds: Number($("intervalInput").value || 0.1),
+    interval_seconds: Number($("intervalInput").value || 0.2),
     max_attempts: Number($("maxAttemptsInput").value || 100000),
     schedule_enabled: $("scheduleEnabledInput").checked,
     scheduled_start_at: normalizeScheduledStart($("scheduledStartInput").value),
@@ -272,7 +272,7 @@ function applyParams(params, options = {}) {
   const importedToken = params.headers?.["wx-token"] || "";
   const token = options.preferParamsToken ? importedToken || cachedToken : cachedToken || importedToken;
   setDateField("dateInput", params.date);
-  $("intervalInput").value = params.interval_seconds ?? 0.1;
+  $("intervalInput").value = params.interval_seconds ?? 0.2;
   $("maxAttemptsInput").value = params.max_attempts ?? 100000;
   $("dryRunInput").checked = params.dry_run === true;
   $("scheduleEnabledInput").checked = params.schedule_enabled === true;

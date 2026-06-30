@@ -93,7 +93,7 @@ class BookingEngine {
         return [
             "dry_run": false,
             "verify_ssl": false,
-            "interval_seconds": 0.1,
+            "interval_seconds": 0.2,
             "max_attempts": 100000,
             "schedule_enabled": false,
             "scheduled_start_at": "",
@@ -303,7 +303,7 @@ class BookingEngine {
             if !waited { return }
         }
 
-        let interval = params["interval_seconds"] as? Double ?? 0.1
+        let interval = max(0.2, params["interval_seconds"] as? Double ?? 0.2)
         let maxAttempts = params["max_attempts"] as? Int ?? 100000
         var attempt = 0
         var successUnits = 0

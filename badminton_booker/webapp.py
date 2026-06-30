@@ -78,7 +78,7 @@ class BookingWebApp:
             "request_file": str(self.capture.path),
             "dry_run": False,
             "verify_ssl": False,
-            "interval_seconds": 0.1,
+            "interval_seconds": 0.2,
             "max_attempts": 100000,
             "schedule_enabled": False,
             "scheduled_start_at": "",
@@ -609,7 +609,7 @@ class BookingWebApp:
                 if max_attempts and attempt >= max_attempts:
                     self.log(state, "达到最大尝试次数，任务结束")
                     break
-                time.sleep(max(0.01, float(params.get("interval_seconds") or 0.1)))
+                time.sleep(max(0.2, float(params.get("interval_seconds") or 0.2)))
             else:
                 self.log(state, "用户手动停止，任务结束")
         except Exception as exc:
@@ -1661,7 +1661,7 @@ def _admin_form_to_params(snapshot, current: dict, form: dict[str, list[str]], w
             "verify_ssl": False,
             "schedule_enabled": _form_bool(form, "schedule_enabled"),
             "scheduled_start_at": _form_value(form, "scheduled_start_at", ""),
-            "interval_seconds": _to_number(_form_value(form, "interval_seconds", str(current.get("interval_seconds") or 0.1)), 0.01),
+            "interval_seconds": _to_number(_form_value(form, "interval_seconds", str(current.get("interval_seconds") or 0.2)), 0.2),
             "max_attempts": int(_to_number(_form_value(form, "max_attempts", str(current.get("max_attempts") or 100000)), 100000)),
             "headers": {
                 **(current.get("headers") or {}),
@@ -1888,7 +1888,7 @@ def _admin_task_card(task: dict, snapshot, backends: list[dict] | None = None, b
           <input name="dates" value="{escape(dates)}" placeholder="YYYY/MM/DD,YYYY/MM/DD" />
         </label>
         <label>轮询间隔秒
-          <input name="interval_seconds" type="number" min="0.01" step="0.01" value="{escape(str(params.get('interval_seconds') or 0.1))}" />
+          <input name="interval_seconds" type="number" min="0.2" step="0.01" value="{escape(str(params.get('interval_seconds') or 0.2))}" />
         </label>
         <label>最大尝试次数
           <input name="max_attempts" type="number" min="0" value="{escape(str(params.get('max_attempts') or 100000))}" />
