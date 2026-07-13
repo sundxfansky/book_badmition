@@ -244,6 +244,59 @@ button.danger {
   border-color: var(--danger);
 }
 
+.request-preview {
+  margin: 10px 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  padding: 10px 12px;
+}
+
+.request-preview-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.request-preview-summary {
+  font-size: 13px;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+
+.request-preview-list {
+  display: grid;
+  gap: 6px;
+}
+
+.request-preview-round {
+  display: grid;
+  gap: 5px;
+}
+
+.request-preview-round + .request-preview-round {
+  margin-top: 8px;
+}
+
+.request-preview-round-title {
+  font-size: 12px;
+  color: var(--accent-strong);
+  font-weight: 700;
+}
+
+.request-preview-item {
+  font-size: 12px;
+  color: var(--text);
+  background: #f8fafc;
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+
+.request-preview-item strong {
+  margin-right: 6px;
+}
+
 .grid {
   display: grid;
   gap: 12px;
@@ -1183,5 +1236,3 @@ pre {
     flex: 0 1 auto;
   }
 }
-
-

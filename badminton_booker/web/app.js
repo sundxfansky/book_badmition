@@ -11,7 +11,7 @@ const $ = (id) => document.getElementById(id);
 
 function syncEditableDisplay(field) {
   const input = field.querySelector("input");
-  const display = field.querySelector(".editable-display");
+  const display = field.querySelector(".editable-derdqweasdrftgyhbnujnsxcfvbn m ,.isplay");
   display.textContent = input.value;
 }
 
@@ -21,8 +21,8 @@ function setupEditableFields() {
     const display = field.querySelector(".editable-display");
     display.addEventListener("click", () => {
       display.style.display = "none";
-      input.style.display = "";
-      input.focus();
+      input.style.display = "";----0000
+      input.focus();9oploi
       input.select();
     });
     display.addEventListener("keydown", (e) => {
@@ -165,6 +165,7 @@ function restoreTabUI(tab) {
     applyParams(s.params, { preferParamsToken: true });
   }
   renderChoices();
+  renderRequestPreview(null);
   renderStatus({ running: s.running, waiting_for_schedule: s.waitingForSchedule, logs: s.logs, last_request: null });
   scheduleTokenCheck();
 }
@@ -242,13 +243,16 @@ function closeTab(tabId, event) {
 
 function currentParams() {
   cacheWxToken();
+  const qps = Number($("qpsInput").value || 5);
   return {
     dry_run: $("dryRunInput").checked,
     verify_ssl: false,
-    interval_seconds: Number($("intervalInput").value || 0.2),
+    qps,
+    interval_seconds: 1 / Math.max(0.1, qps),
     max_attempts: Number($("maxAttemptsInput").value || 100000),
     schedule_enabled: $("scheduleEnabledInput").checked,
     scheduled_start_at: normalizeScheduledStart($("scheduledStartInput").value),
+    run_duration_seconds: Number($("runDurationInput").value || 45),
     date: activeState().selectedDates[0] || dateFieldValue("dateInput"),
     dates: activeState().selectedDates,
     request_mode: requestMode(),
@@ -272,17 +276,19 @@ function applyParams(params, options = {}) {
   const importedToken = params.headers?.["wx-token"] || "";
   const token = options.preferParamsToken ? importedToken || cachedToken : cachedToken || importedToken;
   setDateField("dateInput", params.date);
-  $("intervalInput").value = params.interval_seconds ?? 0.2;
+  $("qpsInput").value = params.qps ?? (params.interval_seconds ? (1 / Number(params.interval_seconds)).toFixed(1) : 5);
   $("maxAttemptsInput").value = params.max_attempts ?? 100000;
   $("dryRunInput").checked = params.dry_run === true;
   $("scheduleEnabledInput").checked = params.schedule_enabled === true;
   $("scheduledStartInput").value = toDatetimeLocalValue(params.scheduled_start_at || "");
+  $("runDurationInput").value = params.run_duration_seconds ?? 45;
   $("monitorEnabledInput").checked = params.monitor_enabled === true;
   $("monitorIntervalInput").value = params.monitor_interval_seconds ?? 20;
   $("wxTokenInput").value = token;
   $("shopIdInput").value = params.headers?.["shop-id"] || "";
   $("brandCodeInput").value = params.headers?.["brand-code"] || "";
   $("pairModeInput").checked = params.request_mode === "pair";
+  updateScheduleWindowHint();
 
   for (const field of document.querySelectorAll(".editable-field")) {
     const input = field.querySelector("input");
@@ -364,6 +370,68 @@ function renderDateMeta() {
   const s = activeState();
   const date = s.selectedDates[0] || dateFieldValue("dateInput");
   $("dateWeekday").textContent = weekdayText(date);
+}
+
+function renderRequestPreview(data) {
+  const summaryEl = $("requestPreviewSummary");
+  const listEl = $("requestPreviewList");
+  if (!summaryEl || !listEl) return;
+
+  listEl.innerHTML = "";
+  if (!data) {
+    summaryEl.textContent = "正在计算…";
+    return;
+  }
+
+  if (data.mode === "monitor") {
+    const submitRequests = data.submit_requests_when_released || [];
+    summaryEl.textContent = `监听模式：当前会查询 ${data.count || 0} 次场地状态；一旦放票，预计提交 ${submitRequests.length} 个下单请求。`;
+    submitRequests.forEach((request, index) => {
+      const item = document.createElement("div");
+      item.className = "request-preview-item";
+      item.innerHTML = `<strong>下单 ${index + 1}</strong>${escapeHtml(previewRequestLabel(request))}`;
+      listEl.appendChild(item);
+    });
+    if (!submitRequests.length) {
+      const item = document.createElement("div");
+      item.className = "request-preview-item";
+      item.textContent = "还没有可提交的监听目标。";
+      listEl.appendChild(item);
+    }
+    return;
+  }
+
+  const requests = data.requests || [];
+  summaryEl.textContent = `普通抢票：将按 QPS 轮询发送 ${data.count || 0} 个请求。`;
+
+  requests.forEach((request, index) => {
+    const item = document.createElement("div");
+    item.className = "request-preview-item";
+    item.innerHTML = `<strong>请求 ${index + 1}</strong>${escapeHtml(previewRequestLabel(request))}`;
+    listEl.appendChild(item);
+  });
+  if (!requests.length) {
+    const item = document.createElement("div");
+    item.className = "request-preview-item";
+    item.textContent = "还没有可提交的请求，请先选择日期、场地和时间。";
+    listEl.appendChild(item);
+  }
+}
+
+function previewRequestLabel(request) {
+  const body = request?.body || {};
+  const date = body.venues_date || "";
+  const slots = body.venues_site_time || [];
+  if (!Array.isArray(slots) || !slots.length) {
+    return `${date || "未选日期"} · 无场地时间`;
+  }
+  const parts = slots.map((slot) => {
+    const court = slot.site_name || slot.site_id || "?";
+    const start = slot.start_time || "?";
+    const end = slot.end_time || "?";
+    return `${court} ${start}-${end}`;
+  });
+  return `${date || "未选日期"} · ${parts.join(" + ")}`;
 }
 
 // --- PLACEHOLDER_GRID ---
@@ -576,7 +644,37 @@ function toDatetimeLocalValue(value) {
 function defaultScheduledStartValue() {
   const date = new Date();
   const pad = (v) => String(v).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T23:59:30`;
+  const target = new Date(date);
+  target.setHours(23, 59, 55, 0);
+  if (target <= date) {
+    target.setDate(target.getDate() + 1);
+  }
+  return `${target.getFullYear()}-${pad(target.getMonth() + 1)}-${pad(target.getDate())}T${pad(target.getHours())}:${pad(target.getMinutes())}:${pad(target.getSeconds())}`;
+}
+
+function formatScheduleHintDate(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (v) => String(v).padStart(2, "0");
+  return `${date.getMonth() + 1}/${date.getDate()} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function updateScheduleWindowHint() {
+  const hint = $("scheduleWindowHint");
+  if (!hint) return;
+  const startValue = $("scheduledStartInput")?.value || "";
+  const duration = Math.max(1, Number($("runDurationInput")?.value || 45));
+  if (!startValue) {
+    hint.textContent = "默认运行到次日 00:00:40";
+    return;
+  }
+  const start = new Date(startValue);
+  if (Number.isNaN(start.getTime())) {
+    hint.textContent = "请检查定时启动时间";
+    return;
+  }
+  const end = new Date(start.getTime() + duration * 1000);
+  hint.textContent = `将于 ${formatScheduleHintDate(start)} 开始，运行到 ${formatScheduleHintDate(end)}`;
 }
 
 function requestMode() { return $("pairModeInput").checked ? "pair" : "single"; }
@@ -682,6 +780,7 @@ function scheduleTokenCheck() {
 async function preview() {
   const data = await api("/api/preview", { method: "POST", body: JSON.stringify(currentParams()) });
   activeState().previewPinned = true;
+  renderRequestPreview(data);
 }
 
 async function save() {
@@ -1033,18 +1132,15 @@ function defaultDate() {
   return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())}`;
 }
 
-function nextFridayDate() {
+function oneWeekLaterDate() {
   const d = new Date();
   d.setDate(d.getDate() + 7);
-  const day = d.getDay();
-  const daysUntilFriday = ((5 - day + 7) % 7);
-  d.setDate(d.getDate() + daysUntilFriday);
   const pad = (v) => String(v).padStart(2, "0");
   return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())}`;
 }
 
 function applyTemplate(date, timeStartHours, mode, btnId) {
-  for (const id of ["tplMorningBtn", "tplFriEveBtn", "tplFriEve2Btn"]) {
+  for (const id of ["tplMorning9Btn", "tplMorning10Btn", "tplMorningPairBtn"]) {
     $(id).classList.toggle("active", id === btnId);
   }
 
@@ -1081,9 +1177,9 @@ $("refreshBtn").addEventListener("click", refreshAll);
 
 $("startBtn").addEventListener("click", start);
 $("stopBtn").addEventListener("click", stop);
-$("tplMorningBtn").addEventListener("click", () => applyTemplate(defaultDate(), ["09:00"], "single", "tplMorningBtn"));
-$("tplFriEveBtn").addEventListener("click", () => applyTemplate(nextFridayDate(), ["20:00", "21:00"], "pair", "tplFriEveBtn"));
-$("tplFriEve2Btn").addEventListener("click", () => applyTemplate(nextFridayDate(), ["19:00"], "single", "tplFriEve2Btn"));
+$("tplMorning9Btn").addEventListener("click", () => applyTemplate(oneWeekLaterDate(), ["09:00"], "single", "tplMorning9Btn"));
+$("tplMorning10Btn").addEventListener("click", () => applyTemplate(oneWeekLaterDate(), ["10:00"], "single", "tplMorning10Btn"));
+$("tplMorningPairBtn").addEventListener("click", () => applyTemplate(oneWeekLaterDate(), ["09:00", "10:00"], "pair", "tplMorningPairBtn"));
 $("addTabBtn").addEventListener("click", handleAddTab);
 $("clearSelectionBtn").addEventListener("click", () => {
   const s = activeState();
@@ -1111,15 +1207,16 @@ $("monitorEnabledInput").addEventListener("change", () => {
 $("clearLogsBtn").addEventListener("click", clearLogs);
 $("autoScrollInput").addEventListener("change", scrollLogsToBottom);
 
-for (const id of ["intervalInput", "maxAttemptsInput", "dryRunInput", "scheduledStartInput", "monitorIntervalInput", "wxTokenInput", "shopIdInput", "brandCodeInput"]) {
+for (const id of ["qpsInput", "maxAttemptsInput", "dryRunInput", "scheduledStartInput", "monitorIntervalInput", "wxTokenInput", "shopIdInput", "brandCodeInput"]) {
   $(id).addEventListener("change", () => { preview(); persistTabs(); });
 }
+$("scheduledStartInput").addEventListener("change", updateScheduleWindowHint);
+$("runDurationInput").addEventListener("change", () => { updateScheduleWindowHint(); preview(); persistTabs(); });
 $("scheduleEnabledInput").addEventListener("change", () => {
   if ($("scheduleEnabledInput").checked) {
-    const now = new Date();
-    const pad = (v) => String(v).padStart(2, "0");
-    $("scheduledStartInput").value = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T23:59:30`;
+    $("scheduledStartInput").value = defaultScheduledStartValue();
   }
+  updateScheduleWindowHint();
   preview();
   persistTabs();
 });

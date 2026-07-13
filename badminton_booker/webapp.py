@@ -79,9 +79,11 @@ class BookingWebApp:
             "dry_run": False,
             "verify_ssl": False,
             "interval_seconds": 0.2,
+            "qps": 5,
             "max_attempts": 100000,
             "schedule_enabled": False,
-            "scheduled_start_at": "",
+            "scheduled_start_at": _default_scheduled_start_at(),
+            "run_duration_seconds": 45,
             "date": default_date(),
             "dates": [default_date()],
             "monitor_enabled": False,
@@ -153,7 +155,7 @@ class BookingWebApp:
                 "monitor_targets": [_monitor_target_desc(item) for item in _monitor_targets(effective)],
                 "submit_requests_when_released": submit_requests,
             }
-        requests = self.capture.build_submit_requests(effective)
+        requests = _submit_request_sequence(self.capture, effective)
         return {
             "count": len(requests),
             "requests": [_safe_request_summary(request_data) for request_data in requests],
@@ -235,7 +237,7 @@ class BookingWebApp:
                         "dates": params.get("dates", []),
                         "params": params,
                         "selection_count": _selection_count(params),
-                        "interval_seconds": params.get("interval_seconds"),
+                        "qps": _qps(params),
                         "max_attempts": params.get("max_attempts"),
                         "dry_run": params.get("dry_run"),
                         "last_log": state.logs[-1] if state.logs else "",
@@ -582,34 +584,57 @@ class BookingWebApp:
             if not self._wait_for_schedule(state, params):
                 self.log(state, "定时启动已取消，任务未执行")
                 return
+            deadline = time.time() + _run_duration_seconds(params)
             if params.get("monitor_enabled"):
-                self._run_monitor_loop(state, params)
+                self._run_monitor_loop(state, params, deadline)
                 return
+            requests = _submit_request_sequence(self.capture, params)
+            if not requests:
+                self.log(state, "没有可提交的请求，请至少选择日期、场地和时间段")
+                return
+            qps = _qps(params)
+            request_interval = 1.0 / qps
+            max_attempts = int(params.get("max_attempts") or 0)
+            notified_targets: set[str] = set()
+            self.log(state, f"开始按 QPS={qps:g} 轮询 {len(requests)} 个请求")
             while not state.stop_event.is_set():
+                if deadline is not None and time.time() >= deadline:
+                    self.log(state, f"已达到执行时长 {_format_seconds(_run_duration_seconds(params))}，任务结束")
+                    break
+                if max_attempts and attempt >= max_attempts:
+                    self.log(state, "达到最大请求次数，任务结束")
+                    break
+                request_data = requests[attempt % len(requests)]
                 attempt += 1
-                self.log(state, f"第 {attempt} 轮提交预约请求")
-                response = self._send_round(state, params, successful_slot_keys)
+                self.log(state, f"发起第 {attempt} 个请求：{_request_target_desc(request_data)}")
+                response = self._send_request(state, request_data, params)
+                response["index"] = attempt
+                response["target"] = _request_target_desc(request_data)
+                response["request"] = _safe_request_summary(request_data)
+                status = "成功" if response.get("success") else "失败"
+                self.log(state, f"完成第 {attempt} 个请求（{status}）：{response['target']}")
+                if response.get("success"):
+                    self._notify_request_success(state, params, response, notified_targets)
                 with state.lock:
                     state.last_response = response
-                total_success_units += response.get("success_units", 0)
+                total_success_units += _response_success_units(response, successful_slot_keys)
                 if total_success_units >= required_success_units:
                     if not response.get("notification_sent"):
                         response["success"] = True
                         response["success_units"] = total_success_units
+                        response["success_targets"] = [response["target"]]
                         response["stop_reason"] = f"累计成功 {total_success_units}/{required_success_units} 个场地小时，任务停止"
                         self._notify_success(state, params, response)
                     self.log(state, f"累计成功 {total_success_units}/{required_success_units} 个场地小时，任务结束")
                     break
-                if response.get("success"):
-                    if not response.get("notification_sent"):
-                        self._notify_success(state, params, response)
-                    self.log(state, "任务结束")
-                    break
-                max_attempts = int(params.get("max_attempts") or 0)
-                if max_attempts and attempt >= max_attempts:
-                    self.log(state, "达到最大尝试次数，任务结束")
-                    break
-                time.sleep(max(0.2, float(params.get("interval_seconds") or 0.2)))
+                sleep_seconds = request_interval
+                if deadline is not None:
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
+                        self.log(state, f"已达到执行时长 {_format_seconds(_run_duration_seconds(params))}，任务结束")
+                        break
+                    sleep_seconds = min(sleep_seconds, remaining)
+                time.sleep(sleep_seconds)
             else:
                 self.log(state, "用户手动停止，任务结束")
         except Exception as exc:
@@ -620,7 +645,7 @@ class BookingWebApp:
                 state.waiting_for_schedule = False
                 state.scheduled_start_at = ""
 
-    def _run_monitor_loop(self, state: RuntimeState, params: dict) -> None:
+    def _run_monitor_loop(self, state: RuntimeState, params: dict, deadline: float | None = None) -> None:
         attempt = 0
         successful_slot_keys: set[str] = set()
         max_attempts = int(params.get("max_attempts") or 0)
@@ -633,6 +658,9 @@ class BookingWebApp:
         self.log(state, f"开始监听下单：{len(targets)} 个目标，监听间隔 {interval:g} 秒")
         try:
             while not state.stop_event.is_set():
+                if deadline is not None and time.time() >= deadline:
+                    self.log(state, f"已达到执行时长 {_format_seconds(_run_duration_seconds(params))}，监听任务结束")
+                    break
                 attempt += 1
                 self.log(state, f"第 {attempt} 轮监听场地释放")
                 response = self._send_monitor_round(state, params, targets, successful_slot_keys)
@@ -644,7 +672,14 @@ class BookingWebApp:
                 if max_attempts and attempt >= max_attempts:
                     self.log(state, f"达到最大监听次数 {max_attempts}，任务结束")
                     break
-                state.stop_event.wait(interval)
+                wait_seconds = interval
+                if deadline is not None:
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
+                        self.log(state, f"已达到执行时长 {_format_seconds(_run_duration_seconds(params))}，监听任务结束")
+                        break
+                    wait_seconds = min(wait_seconds, remaining)
+                state.stop_event.wait(wait_seconds)
             else:
                 self.log(state, "用户手动停止监听，任务结束")
         except Exception as exc:
@@ -764,8 +799,14 @@ class BookingWebApp:
         self.log(state, "定时启动时间已到，开始执行抢票任务")
         return True
 
-    def _send_round(self, state: RuntimeState, params: dict, successful_slot_keys: set[str] | None = None) -> dict:
-        requests = self.capture.build_submit_requests(params)
+    def _send_round(
+        self,
+        state: RuntimeState,
+        params: dict,
+        successful_slot_keys: set[str] | None = None,
+        rotation_index: int = 0,
+    ) -> dict:
+        requests = self.capture.build_submit_requests(params, rotation_index=rotation_index)
         if not requests:
             self.log(state, "没有可提交的请求，请至少选择日期、场地和时间段")
             return {"success": False, "responses": []}
@@ -981,6 +1022,8 @@ class BookingWebApp:
                 merged[key] = value
         if state.wx_token and not (merged.get("headers") or {}).get("wx-token"):
             merged.setdefault("headers", {})["wx-token"] = state.wx_token
+        merged["qps"] = _qps(merged)
+        merged["interval_seconds"] = 1.0 / merged["qps"]
         return merged
 
 
@@ -1223,11 +1266,80 @@ def _safe_request_summary(request_data: dict) -> dict:
     return summary
 
 
+def _submit_request_sequence(capture: CaptureStore, params: dict) -> list[dict]:
+    if not params.get("selections"):
+        return capture.build_submit_requests(params)
+    max_rotations = _preview_round_limit(params)
+    requests: list[dict] = []
+    seen: set[tuple] = set()
+    seen_rounds: set[tuple] = set()
+    for rotation_index in range(max_rotations):
+        current = capture.build_submit_requests(params, rotation_index=rotation_index)
+        round_signature = _request_round_signature(current)
+        if round_signature in seen_rounds:
+            break
+        seen_rounds.add(round_signature)
+        for request_data in current:
+            signature = _request_signature(request_data)
+            if signature in seen:
+                continue
+            seen.add(signature)
+            requests.append(request_data)
+    return requests
+
+
+def _preview_round_limit(params: dict) -> int:
+    selections = params.get("selections") or []
+    if params.get("request_mode") != "pair":
+        return 1 if selections else 0
+    candidate_count = len(selections) * max(0, len(selections) - 1) // 2
+    return min(30, max(1, candidate_count))
+
+
+def _request_round_signature(requests: list[dict]) -> tuple:
+    return tuple(
+        tuple(
+            (
+                str(slot.get("site_id", "")),
+                str(slot.get("site_name", "")),
+                str(slot.get("start_time", "")),
+                str(slot.get("end_time", "")),
+            )
+            for slot in (request.get("body") or {}).get("venues_site_time", [])
+        )
+        for request in requests
+    )
+
+
+def _request_signature(request_data: dict) -> tuple:
+    return (
+        str((request_data.get("body") or {}).get("venues_date", "")),
+        tuple(
+            (
+                str(slot.get("site_id", "")),
+                str(slot.get("site_name", "")),
+                str(slot.get("start_time", "")),
+                str(slot.get("end_time", "")),
+            )
+            for slot in (request_data.get("body") or {}).get("venues_site_time", [])
+        ),
+    )
+
+
+def _selection_has_court_name(selection: dict, name: str) -> bool:
+    court = selection.get("court") or {}
+    return str(court.get("site_name") or "") == name
+
+
 def _schedule_notification_message(params: dict) -> str:
+    end_at = _scheduled_end_at_text(params)
     return "\n".join(
         [
             "【羽毛球抢票】定时任务已添加",
             f"启动时间：{params.get('scheduled_start_at') or '-'}",
+            f"结束时间：{end_at or '-'}",
+            f"执行时长：{_format_seconds(_run_duration_seconds(params))}",
+            f"QPS：{_qps(params):g}",
             f"抢票信息：{_params_booking_desc(params)}",
             f"模式：{'dry-run' if params.get('dry_run') else '真实提交'}",
         ]
@@ -1524,6 +1636,40 @@ def _scheduled_timestamp(params: dict) -> float | None:
         return None
 
 
+def _default_scheduled_start_at(now: datetime | None = None) -> str:
+    current = now or datetime.now()
+    target = current.replace(hour=23, minute=59, second=55, microsecond=0)
+    if target <= current:
+        target += timedelta(days=1)
+    return target.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _run_duration_seconds(params: dict) -> float:
+    return max(1.0, float(params.get("run_duration_seconds") or 45))
+
+
+def _qps(params: dict) -> float:
+    raw = params.get("qps")
+    if raw not in (None, ""):
+        return max(0.1, float(raw))
+    interval = float(params.get("interval_seconds") or 0.2)
+    return max(0.1, 1.0 / max(0.001, interval))
+
+
+def _run_deadline_timestamp(params: dict) -> float | None:
+    scheduled_ts = _scheduled_timestamp(params)
+    if scheduled_ts is None:
+        return None
+    return scheduled_ts + _run_duration_seconds(params)
+
+
+def _scheduled_end_at_text(params: dict) -> str:
+    deadline = _run_deadline_timestamp(params)
+    if deadline is None:
+        return ""
+    return _format_timestamp(deadline)
+
+
 def _parse_scheduled_datetime(value: str) -> datetime:
     text = value.strip().replace("T", " ")
     formats = [
@@ -1660,8 +1806,16 @@ def _admin_form_to_params(snapshot, current: dict, form: dict[str, list[str]], w
             "dry_run": _form_bool(form, "dry_run"),
             "verify_ssl": False,
             "schedule_enabled": _form_bool(form, "schedule_enabled"),
-            "scheduled_start_at": _form_value(form, "scheduled_start_at", ""),
-            "interval_seconds": _to_number(_form_value(form, "interval_seconds", str(current.get("interval_seconds") or 0.2)), 0.2),
+            "scheduled_start_at": _form_value(form, "scheduled_start_at", _default_scheduled_start_at()),
+            "run_duration_seconds": _to_number(
+                _form_value(form, "run_duration_seconds", str(current.get("run_duration_seconds") or 45)),
+                45,
+            ),
+            "qps": _to_number(_form_value(form, "qps", str(current.get("qps") or _qps(current))), 5),
+            "interval_seconds": 1 / max(
+                0.1,
+                _to_number(_form_value(form, "qps", str(current.get("qps") or _qps(current))), 5),
+            ),
             "max_attempts": int(_to_number(_form_value(form, "max_attempts", str(current.get("max_attempts") or 100000)), 100000)),
             "headers": {
                 **(current.get("headers") or {}),
@@ -1887,10 +2041,10 @@ def _admin_task_card(task: dict, snapshot, backends: list[dict] | None = None, b
         <label>日期（逗号分隔）
           <input name="dates" value="{escape(dates)}" placeholder="YYYY/MM/DD,YYYY/MM/DD" />
         </label>
-        <label>轮询间隔秒
-          <input name="interval_seconds" type="number" min="0.2" step="0.01" value="{escape(str(params.get('interval_seconds') or 0.2))}" />
+        <label>QPS（每秒请求数）
+          <input name="qps" type="number" min="0.1" step="0.1" value="{escape(str(params.get('qps') or _qps(params)))}" />
         </label>
-        <label>最大尝试次数
+        <label>最大请求次数
           <input name="max_attempts" type="number" min="0" value="{escape(str(params.get('max_attempts') or 100000))}" />
         </label>
         <label>shop-id
@@ -1901,6 +2055,9 @@ def _admin_task_card(task: dict, snapshot, backends: list[dict] | None = None, b
         </label>
         <label>定时启动时间
           <input name="scheduled_start_at" value="{escape(str(params.get('scheduled_start_at') or ''))}" placeholder="YYYY-MM-DD HH:MM:SS" />
+        </label>
+        <label>执行时长秒
+          <input name="run_duration_seconds" type="number" min="1" step="1" value="{escape(str(params.get('run_duration_seconds') or 45))}" />
         </label>
         <label>监听间隔秒
           <input name="monitor_interval_seconds" type="number" min="1" step="1" value="{escape(str(params.get('monitor_interval_seconds') or 20))}" />

@@ -196,10 +196,10 @@ class CaptureStore:
             "body": body,
         }
 
-    def build_submit_requests(self, params: dict) -> list[dict]:
+    def build_submit_requests(self, params: dict, rotation_index: int = 0) -> list[dict]:
         selections = params.get("selections") or []
         if selections:
-            return self._build_selection_requests(params, selections)
+            return self._build_selection_requests(params, selections, rotation_index)
 
         courts = params.get("courts") or []
         if not courts and params.get("court"):
@@ -219,7 +219,7 @@ class CaptureStore:
                     requests.append(self.build_submit_request({**params, "date": date, "court": court}))
         return requests
 
-    def _build_selection_requests(self, params: dict, selections: list[dict]) -> list[dict]:
+    def _build_selection_requests(self, params: dict, selections: list[dict], rotation_index: int = 0) -> list[dict]:
         dates = params.get("dates") or []
         if not dates and params.get("date"):
             dates = [params["date"]]
@@ -227,12 +227,17 @@ class CaptureStore:
             dates = [self.submit_body().get("venues_date", "") or default_date()]
 
         mode = params.get("request_mode", "single")
-        groups = _selection_groups(selections, mode)
+        groups = _selection_groups(selections, mode, rotation_index)
         requests = []
         for date in dates:
             for group in groups:
                 court = group[0]["court"]
-                time_slots = [item["time_slot"] for item in group]
+                time_slots = []
+                for item in group:
+                    slot = dict(item["time_slot"])
+                    slot["site_id"] = item["court"].get("site_id")
+                    slot["site_name"] = item["court"].get("site_name")
+                    time_slots.append(slot)
                 requests.append(self.build_submit_request({**params, "date": date, "court": court, "time_slots": time_slots}))
         return requests
 
@@ -391,8 +396,17 @@ def _limited_time_slots(slots: list[dict]) -> list[dict]:
     return list(slots)[:2]
 
 
-def _selection_groups(selections: list[dict], mode: str) -> list[list[dict]]:
-    normalized = [item for item in selections if item.get("court") and item.get("time_slot")]
+def _selection_groups(selections: list[dict], mode: str, rotation_index: int = 0) -> list[list[dict]]:
+    normalized = []
+    seen_keys: set[tuple[str, str, str]] = set()
+    for item in selections:
+        if not item.get("court") or not item.get("time_slot"):
+            continue
+        key = _selection_key(item)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        normalized.append(item)
     normalized.sort(
         key=lambda item: (
             str(item["court"].get("site_id", "")),
@@ -404,22 +418,65 @@ def _selection_groups(selections: list[dict], mode: str) -> list[list[dict]]:
 
     groups: list[list[dict]] = []
     used: set[int] = set()
-    for index, item in enumerate(normalized):
-        if index in used:
+    candidates = _ordered_pair_candidates(normalized, rotation_index)
+    for first_index, second_index in candidates:
+        if first_index in used or second_index in used:
             continue
-        used.add(index)
-        pair = [item]
-        for other_index, other in enumerate(normalized):
-            if other_index in used:
-                continue
-            same_court = str(item["court"].get("site_id")) == str(other["court"].get("site_id"))
-            adjacent = int(item["time_slot"].get("end_timestamp", 0)) == int(other["time_slot"].get("start_timestamp", -1))
-            if same_court and adjacent:
-                pair.append(other)
-                used.add(other_index)
-                break
-        groups.append(pair)
+        groups.append([normalized[first_index], normalized[second_index]])
+        used.add(first_index)
+        used.add(second_index)
+
     return groups
+
+
+def _selection_key(selection: dict) -> tuple[str, str, str]:
+    court = selection.get("court") or {}
+    slot = selection.get("time_slot") or {}
+    return (
+        str(court.get("site_id", "")),
+        str(slot.get("start_time", "")),
+        str(slot.get("end_time", "")),
+    )
+
+
+def _ordered_pair_candidates(selections: list[dict], rotation_index: int) -> list[tuple[int, int]]:
+    priority: list[tuple[int, int]] = []
+    normal: list[tuple[int, int]] = []
+    for first_index, first in enumerate(selections):
+        for second_index in range(first_index + 1, len(selections)):
+            second = selections[second_index]
+            if not _pair_compatible(first, second):
+                continue
+            bucket = priority if (_selection_has_priority_court(first) or _selection_has_priority_court(second)) else normal
+            bucket.append((first_index, second_index))
+    return _rotated(priority, rotation_index) + _rotated(normal, rotation_index)
+
+
+def _rotated(items: list[tuple[int, int]], rotation_index: int) -> list[tuple[int, int]]:
+    if not items:
+        return []
+    offset = rotation_index % len(items)
+    return items[offset:] + items[:offset]
+
+
+def _pair_compatible(first: dict, second: dict) -> bool:
+    first_slot = first["time_slot"]
+    second_slot = second["time_slot"]
+    same_court = str(first["court"].get("site_id")) == str(second["court"].get("site_id"))
+    adjacent = int(first_slot.get("end_timestamp", 0)) == int(second_slot.get("start_timestamp", -1))
+    same_time_different_court = (
+        not same_court
+        and str(first_slot.get("start_time", "")) == str(second_slot.get("start_time", ""))
+        and str(first_slot.get("end_time", "")) == str(second_slot.get("end_time", ""))
+    )
+    return (same_court and adjacent) or same_time_different_court
+
+
+def _selection_has_priority_court(selection: dict) -> bool:
+    court = selection.get("court") or {}
+    site_name = str(court.get("site_name") or "")
+    site_id = str(court.get("site_id") or "")
+    return "7号" in site_name or site_name.strip() == "7" or site_id == "7"
 
 
 def shifted_timestamp(slot: dict, target_date: str, key: str) -> int:

@@ -33,9 +33,11 @@ struct BookingParams: Codable {
     var dryRun: Bool
     var verifySsl: Bool
     var intervalSeconds: Double
+    var qps: Double?
     var maxAttempts: Int
     var scheduleEnabled: Bool
     var scheduledStartAt: String
+    var runDurationSeconds: Double
     var date: String
     var dates: [String]
     var requestMode: String?
@@ -51,9 +53,11 @@ struct BookingParams: Codable {
         case dryRun = "dry_run"
         case verifySsl = "verify_ssl"
         case intervalSeconds = "interval_seconds"
+        case qps
         case maxAttempts = "max_attempts"
         case scheduleEnabled = "schedule_enabled"
         case scheduledStartAt = "scheduled_start_at"
+        case runDurationSeconds = "run_duration_seconds"
         case date, dates
         case requestMode = "request_mode"
         case courts

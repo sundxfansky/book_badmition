@@ -5,13 +5,13 @@ class RequestBuilder {
 
     private var cachedTemplate: RequestTemplate?
 
-    func buildSubmitRequests(params: [String: Any]) -> [[String: Any]] {
+    func buildSubmitRequests(params: [String: Any], rotationIndex: Int = 0) -> [[String: Any]] {
         let template = loadTemplate()
         if template.submitURL.isEmpty { return [] }
 
         let selections = params["selections"] as? [[String: Any]] ?? []
         if !selections.isEmpty {
-            return buildSelectionRequests(template: template, params: params, selections: selections)
+            return buildSelectionRequests(template: template, params: params, selections: selections, rotationIndex: rotationIndex)
         }
 
         let dates = (params["dates"] as? [String]) ?? [params["date"] as? String ?? VenueDefaults.shared.defaultDate]
@@ -30,17 +30,24 @@ class RequestBuilder {
         return requests
     }
 
-    private func buildSelectionRequests(template: RequestTemplate, params: [String: Any], selections: [[String: Any]]) -> [[String: Any]] {
+    private func buildSelectionRequests(template: RequestTemplate, params: [String: Any], selections: [[String: Any]], rotationIndex: Int = 0) -> [[String: Any]] {
         let dates = (params["dates"] as? [String]) ?? [params["date"] as? String ?? VenueDefaults.shared.defaultDate]
         let mode = params["request_mode"] as? String ?? "single"
-        let groups = selectionGroups(selections: selections, mode: mode)
+        let groups = selectionGroups(selections: selections, mode: mode, rotationIndex: rotationIndex)
 
         var requests: [[String: Any]] = []
         for date in dates {
             for group in groups {
                 guard let firstItem = group.first,
                       let court = firstItem["court"] as? [String: Any] else { continue }
-                let timeSlots = group.compactMap { $0["time_slot"] as? [String: Any] }
+                let timeSlots = group.compactMap { item -> [String: Any]? in
+                    guard let slot = item["time_slot"] as? [String: Any],
+                          let slotCourt = item["court"] as? [String: Any] else { return nil }
+                    var merged = slot
+                    merged["site_id"] = slotCourt["site_id"]
+                    merged["site_name"] = slotCourt["site_name"]
+                    return merged
+                }
                 let req = buildSingleRequest(template: template, date: date, court: court, timeSlots: timeSlots, params: params)
                 requests.append(req)
             }
@@ -48,9 +55,15 @@ class RequestBuilder {
         return requests
     }
 
-    private func selectionGroups(selections: [[String: Any]], mode: String) -> [[[String: Any]]] {
+    private func selectionGroups(selections: [[String: Any]], mode: String, rotationIndex: Int = 0) -> [[[String: Any]]] {
+        var seenSelectionKeys = Set<String>()
         let normalized = selections.filter { item in
             item["court"] is [String: Any] && item["time_slot"] is [String: Any]
+        }.filter { item in
+            let key = selectionKey(item)
+            if seenSelectionKeys.contains(key) { return false }
+            seenSelectionKeys.insert(key)
+            return true
         }.sorted { a, b in
             let aCourtId = String(describing: (a["court"] as? [String: Any])?["site_id"] ?? "")
             let bCourtId = String(describing: (b["court"] as? [String: Any])?["site_id"] ?? "")
@@ -66,26 +79,68 @@ class RequestBuilder {
 
         var groups: [[[String: Any]]] = []
         var used = Set<Int>()
-        for (index, item) in normalized.enumerated() {
-            if used.contains(index) { continue }
-            used.insert(index)
-            var pair = [item]
-            let courtId = String(describing: (item["court"] as? [String: Any])?["site_id"] ?? "")
-            let endTs = ((item["time_slot"] as? [String: Any])?["end_timestamp"] as? Int) ?? 0
-
-            for (otherIndex, other) in normalized.enumerated() {
-                if used.contains(otherIndex) { continue }
-                let otherCourtId = String(describing: (other["court"] as? [String: Any])?["site_id"] ?? "")
-                let otherStart = ((other["time_slot"] as? [String: Any])?["start_timestamp"] as? Int) ?? -1
-                if courtId == otherCourtId && endTs == otherStart {
-                    pair.append(other)
-                    used.insert(otherIndex)
-                    break
-                }
-            }
-            groups.append(pair)
+        for pair in orderedPairCandidates(selections: normalized, rotationIndex: rotationIndex) {
+            if used.contains(pair.0) || used.contains(pair.1) { continue }
+            groups.append([normalized[pair.0], normalized[pair.1]])
+            used.insert(pair.0)
+            used.insert(pair.1)
         }
         return groups
+    }
+
+    private func selectionKey(_ selection: [String: Any]) -> String {
+        let court = selection["court"] as? [String: Any] ?? [:]
+        let slot = selection["time_slot"] as? [String: Any] ?? [:]
+        return [
+            String(describing: court["site_id"] ?? ""),
+            String(describing: slot["start_time"] ?? ""),
+            String(describing: slot["end_time"] ?? ""),
+        ].joined(separator: "|")
+    }
+
+    private func orderedPairCandidates(selections: [[String: Any]], rotationIndex: Int) -> [(Int, Int)] {
+        var priority: [(Int, Int)] = []
+        var normal: [(Int, Int)] = []
+        for firstIndex in selections.indices {
+            for secondIndex in selections.indices where secondIndex > firstIndex {
+                let first = selections[firstIndex]
+                let second = selections[secondIndex]
+                guard pairCompatible(first, second) else { continue }
+                if selectionHasPriorityCourt(first) || selectionHasPriorityCourt(second) {
+                    priority.append((firstIndex, secondIndex))
+                } else {
+                    normal.append((firstIndex, secondIndex))
+                }
+            }
+        }
+        return rotated(priority, rotationIndex: rotationIndex) + rotated(normal, rotationIndex: rotationIndex)
+    }
+
+    private func rotated(_ items: [(Int, Int)], rotationIndex: Int) -> [(Int, Int)] {
+        guard !items.isEmpty else { return [] }
+        let offset = rotationIndex % items.count
+        return Array(items[offset...]) + Array(items[..<offset])
+    }
+
+    private func pairCompatible(_ first: [String: Any], _ second: [String: Any]) -> Bool {
+        let firstCourtId = String(describing: (first["court"] as? [String: Any])?["site_id"] ?? "")
+        let secondCourtId = String(describing: (second["court"] as? [String: Any])?["site_id"] ?? "")
+        let firstSlot = first["time_slot"] as? [String: Any] ?? [:]
+        let secondSlot = second["time_slot"] as? [String: Any] ?? [:]
+        let sameCourt = firstCourtId == secondCourtId
+        let adjacentSameCourt = sameCourt
+            && (((firstSlot["end_timestamp"] as? Int) ?? 0) == ((secondSlot["start_timestamp"] as? Int) ?? -1))
+        let sameTimeDifferentCourt = !sameCourt
+            && String(describing: firstSlot["start_time"] ?? "") == String(describing: secondSlot["start_time"] ?? "")
+            && String(describing: firstSlot["end_time"] ?? "") == String(describing: secondSlot["end_time"] ?? "")
+        return adjacentSameCourt || sameTimeDifferentCourt
+    }
+
+    private func selectionHasPriorityCourt(_ selection: [String: Any]) -> Bool {
+        let court = selection["court"] as? [String: Any] ?? [:]
+        let siteName = String(describing: court["site_name"] ?? "")
+        let siteId = String(describing: court["site_id"] ?? "")
+        return siteName.contains("7号") || siteName.trimmingCharacters(in: .whitespacesAndNewlines) == "7" || siteId == "7"
     }
 
     func buildSiteListRequest(params: [String: Any]) -> [String: Any]? {
@@ -124,8 +179,8 @@ class RequestBuilder {
             let startTs = (slot["start_timestamp"] as? Int ?? 0) + secondsOffset
             let endTs = (slot["end_timestamp"] as? Int ?? 0) + secondsOffset
             return [
-                "site_id": siteId,
-                "site_name": siteName,
+                "site_id": slot["site_id"] ?? siteId,
+                "site_name": slot["site_name"] as? String ?? siteName,
                 "start_time": slot["start_time"] as? String ?? "",
                 "end_time": slot["end_time"] as? String ?? "",
                 "start_timestamp": startTs,

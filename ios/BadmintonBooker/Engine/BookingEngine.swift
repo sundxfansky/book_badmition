@@ -94,9 +94,11 @@ class BookingEngine {
             "dry_run": false,
             "verify_ssl": false,
             "interval_seconds": 0.2,
+            "qps": 5,
             "max_attempts": 100000,
             "schedule_enabled": false,
-            "scheduled_start_at": "",
+            "scheduled_start_at": defaultScheduledStartAt(),
+            "run_duration_seconds": 45,
             "date": defaults.defaultDate,
             "dates": [defaults.defaultDate],
             "monitor_enabled": false,
@@ -131,7 +133,7 @@ class BookingEngine {
     private func preview(clientId: String, params: [String: Any]?) -> [String: Any] {
         let state = stateFor(clientId)
         let effective = mergedParams(state: state, incoming: params ?? [:])
-        let requests = RequestBuilder.shared.buildSubmitRequests(params: effective)
+        let requests = submitRequestSequence(params: effective)
         return [
             "count": requests.count,
             "requests": requests.map { requestSummary($0) },
@@ -169,7 +171,12 @@ class BookingEngine {
 
         if let scheduleEnabled = runParams["schedule_enabled"] as? Bool, scheduleEnabled,
            let startAt = runParams["scheduled_start_at"] as? String, !startAt.isEmpty {
-            log(state: state, "已设置定时启动：\(startAt)")
+            let duration = runDurationSeconds(params: runParams)
+            if let endAt = scheduledEndAtText(params: runParams) {
+                log(state: state, "已设置定时启动：\(startAt) 至 \(endAt)，执行 \(formatDuration(duration))")
+            } else {
+                log(state: state, "已设置定时启动：\(startAt)")
+            }
         } else {
             log(state: state, "开始抢票...")
         }
@@ -303,8 +310,11 @@ class BookingEngine {
             if !waited { return }
         }
 
-        let interval = max(0.2, params["interval_seconds"] as? Double ?? 0.2)
         let maxAttempts = params["max_attempts"] as? Int ?? 100000
+        let qps = qpsValue(params: params)
+        let requestInterval = 1.0 / qps
+        let duration = runDurationSeconds(params: params)
+        let deadline = Date().addingTimeInterval(duration)
         var attempt = 0
         var successUnits = 0
         let requiredSuccessUnits = requiredSuccessUnits(params: params)
@@ -317,20 +327,30 @@ class BookingEngine {
             return
         }
 
+        let requests = submitRequestSequence(params: params)
+        if requests.isEmpty {
+            log(state: state, "无法构建请求，请检查参数")
+            state.lock.withLock {
+                state.running = false
+            }
+            return
+        }
+        log(state: state, "开始按 QPS=\(formatNumber(qps)) 轮询 \(requests.count) 个请求")
+
         while !state.lock.withLock({ state.stopRequested }) {
+            if Date() >= deadline {
+                log(state: state, "已达到执行时长 \(formatDuration(duration))，任务结束")
+                break
+            }
+            if maxAttempts > 0 && attempt >= maxAttempts {
+                log(state: state, "已达到最大请求次数 \(maxAttempts)")
+                break
+            }
+
+            let request = requests[attempt % requests.count]
             attempt += 1
-            if maxAttempts > 0 && attempt > maxAttempts {
-                log(state: state, "已达到最大尝试次数 \(maxAttempts)")
-                break
-            }
 
-            let requests = RequestBuilder.shared.buildSubmitRequests(params: params)
-            if requests.isEmpty {
-                log(state: state, "无法构建请求，请检查参数")
-                break
-            }
-
-            let results = await sendRound(state: state, requests: requests, params: params, attempt: attempt)
+            let results = await sendRound(state: state, requests: [request], params: params, attempt: attempt)
             successUnits += results
 
             if successUnits >= requiredSuccessUnits {
@@ -338,8 +358,14 @@ class BookingEngine {
                 break
             }
 
-            if interval > 0 {
-                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+            if requestInterval > 0 {
+                let remaining = deadline.timeIntervalSinceNow
+                if remaining <= 0 {
+                    log(state: state, "已达到执行时长 \(formatDuration(duration))，任务结束")
+                    break
+                }
+                let sleepSeconds = min(requestInterval, remaining)
+                try? await Task.sleep(nanoseconds: UInt64(sleepSeconds * 1_000_000_000))
             }
         }
 
@@ -569,7 +595,52 @@ class BookingEngine {
         if base.isEmpty {
             return defaultParams()
         }
+        let qps = qpsValue(params: base)
+        base["qps"] = qps
+        base["interval_seconds"] = 1.0 / qps
         return base
+    }
+
+    private func defaultScheduledStartAt(now: Date = Date()) -> String {
+        let calendar = Calendar(identifier: .gregorian)
+        let timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
+        var components = calendar.dateComponents(in: timeZone, from: now)
+        components.hour = 23
+        components.minute = 59
+        components.second = 55
+        components.nanosecond = 0
+        var target = calendar.date(from: components) ?? now
+        if target <= now {
+            target = calendar.date(byAdding: .day, value: 1, to: target) ?? target.addingTimeInterval(86400)
+        }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        formatter.timeZone = timeZone
+        return formatter.string(from: target)
+    }
+
+    private func runDurationSeconds(params: [String: Any]) -> TimeInterval {
+        max(1, doubleValue(params["run_duration_seconds"], defaultValue: 45))
+    }
+
+    private func qpsValue(params: [String: Any]) -> Double {
+        if params["qps"] != nil {
+            return max(0.1, doubleValue(params["qps"], defaultValue: 5))
+        }
+        let interval = max(0.001, doubleValue(params["interval_seconds"], defaultValue: 0.2))
+        return max(0.1, 1.0 / interval)
+    }
+
+    private func scheduledEndAtText(params: [String: Any]) -> String? {
+        guard let scheduleEnabled = params["schedule_enabled"] as? Bool, scheduleEnabled,
+              let startAt = params["scheduled_start_at"] as? String, !startAt.isEmpty else {
+            return nil
+        }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        guard let startDate = formatter.date(from: startAt) else { return nil }
+        return formatter.string(from: startDate.addingTimeInterval(runDurationSeconds(params: params)))
     }
 
     private func log(state: EngineState, _ message: String) {
@@ -593,6 +664,67 @@ class BookingEngine {
         }
         summary["body"] = request["body"]
         return summary
+    }
+
+    private func submitRequestSequence(params: [String: Any]) -> [[String: Any]] {
+        guard let selections = params["selections"] as? [[String: Any]], !selections.isEmpty else {
+            return RequestBuilder.shared.buildSubmitRequests(params: params)
+        }
+        let maxRounds = previewRoundLimit(params: params, selectionCount: selections.count)
+        var requests: [[String: Any]] = []
+        var seenRequests = Set<String>()
+        var seenRounds = Set<String>()
+        for rotationIndex in 0..<maxRounds {
+            let current = RequestBuilder.shared.buildSubmitRequests(params: params, rotationIndex: rotationIndex)
+            let roundSignature = requestRoundSignature(current)
+            if seenRounds.contains(roundSignature) { break }
+            seenRounds.insert(roundSignature)
+            for request in current {
+                let signature = requestSignature(request)
+                if seenRequests.contains(signature) { continue }
+                seenRequests.insert(signature)
+                requests.append(request)
+            }
+        }
+        return requests
+    }
+
+    private func previewRoundLimit(params: [String: Any], selectionCount: Int) -> Int {
+        if (params["request_mode"] as? String) != "pair" {
+            return selectionCount > 0 ? 1 : 0
+        }
+        let candidateCount = selectionCount * max(0, selectionCount - 1) / 2
+        return min(30, max(1, candidateCount))
+    }
+
+    private func requestRoundSignature(_ requests: [[String: Any]]) -> String {
+        requests.map { request in
+            let body = request["body"] as? [String: Any] ?? [:]
+            let slots = body["venues_site_time"] as? [[String: Any]] ?? []
+            return slots.map { slot in
+                [
+                    String(describing: slot["site_id"] ?? ""),
+                    String(describing: slot["site_name"] ?? ""),
+                    String(describing: slot["start_time"] ?? ""),
+                    String(describing: slot["end_time"] ?? ""),
+                ].joined(separator: "|")
+            }.joined(separator: "+")
+        }.joined(separator: "||")
+    }
+
+    private func requestSignature(_ request: [String: Any]) -> String {
+        let body = request["body"] as? [String: Any] ?? [:]
+        let date = String(describing: body["venues_date"] ?? "")
+        let slots = body["venues_site_time"] as? [[String: Any]] ?? []
+        let slotSignature = slots.map { slot in
+            [
+                String(describing: slot["site_id"] ?? ""),
+                String(describing: slot["site_name"] ?? ""),
+                String(describing: slot["start_time"] ?? ""),
+                String(describing: slot["end_time"] ?? ""),
+            ].joined(separator: "|")
+        }.joined(separator: "+")
+        return "\(date)::\(slotSignature)"
     }
 
     private func siteListSnapshot(from payload: [String: Any], params: [String: Any]) -> [String: Any] {
@@ -656,6 +788,20 @@ class BookingEngine {
         if let value = value as? Double { return Int(value) }
         if let value = value as? String { return Int(value) }
         return nil
+    }
+
+    private func doubleValue(_ value: Any?, defaultValue: Double = 0) -> Double {
+        if let value = value as? Double { return value }
+        if let value = value as? Int { return Double(value) }
+        if let value = value as? String, let double = Double(value) { return double }
+        return defaultValue
+    }
+
+    private func formatNumber(_ value: Double) -> String {
+        if value.rounded() == value {
+            return String(Int(value))
+        }
+        return String(format: "%.2f", value).replacingOccurrences(of: #"0+$"#, with: "", options: .regularExpression)
     }
 
     private func formatDuration(_ seconds: TimeInterval) -> String {

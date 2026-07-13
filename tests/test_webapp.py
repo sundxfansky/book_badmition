@@ -7,6 +7,7 @@ from unittest.mock import patch
 import badminton_booker.webapp as webapp
 from badminton_booker.webapp import BookingWebApp, _admin_page
 from badminton_booker.venue_defaults import default_date
+from badminton_booker.capture import _selection_groups, CaptureStore
 
 
 def _tomorrow():
@@ -18,6 +19,145 @@ def _day_after(days=1):
 
 
 class BookingWebAppTest(unittest.TestCase):
+    def test_pair_mode_groups_same_time_across_courts(self) -> None:
+        selections = [
+            {
+                "court": {"site_id": 1, "site_name": "1号场"},
+                "time_slot": {"start_time": "09:00", "end_time": "10:00", "start_timestamp": 100, "end_timestamp": 200},
+            },
+            {
+                "court": {"site_id": 2, "site_name": "2号场"},
+                "time_slot": {"start_time": "09:00", "end_time": "10:00", "start_timestamp": 100, "end_timestamp": 200},
+            },
+        ]
+
+        groups = _selection_groups(selections, "pair")
+
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(len(groups[0]), 2)
+
+    def test_pair_mode_submit_request_keeps_each_slot_court(self) -> None:
+        store = CaptureStore("request.txt")
+        params = {
+            "date": _tomorrow(),
+            "dates": [_tomorrow()],
+            "request_mode": "pair",
+            "headers": {},
+            "selections": [
+                {
+                    "court": {"site_id": 1, "site_name": "1号场"},
+                    "time_slot": {"start_time": "09:00", "end_time": "10:00", "start_timestamp": 100, "end_timestamp": 200, "price": "75", "times": "1"},
+                },
+                {
+                    "court": {"site_id": 2, "site_name": "2号场"},
+                    "time_slot": {"start_time": "09:00", "end_time": "10:00", "start_timestamp": 100, "end_timestamp": 200, "price": "75", "times": "1"},
+                },
+            ],
+        }
+
+        requests = store.build_submit_requests(params)
+
+        self.assertEqual(len(requests), 1)
+        site_times = requests[0]["body"]["venues_site_time"]
+        self.assertEqual([item["site_id"] for item in site_times], [1, 2])
+        self.assertEqual([item["site_name"] for item in site_times], ["1号场", "2号场"])
+
+    def test_pair_mode_deduplicates_same_court_same_time_selection(self) -> None:
+        selections = [
+            {
+                "court": {"site_id": 1, "site_name": "1号场"},
+                "time_slot": {"start_time": "09:00", "end_time": "10:00", "start_timestamp": 100, "end_timestamp": 200},
+            },
+            {
+                "court": {"site_id": 1, "site_name": "1号场"},
+                "time_slot": {"start_time": "09:00", "end_time": "10:00", "start_timestamp": 100, "end_timestamp": 200},
+            },
+        ]
+
+        groups = _selection_groups(selections, "pair")
+
+        self.assertEqual(groups, [])
+
+    def test_pair_mode_prioritizes_requests_with_court_7(self) -> None:
+        store = CaptureStore("request.txt")
+        params = {
+            "date": _tomorrow(),
+            "dates": [_tomorrow()],
+            "request_mode": "pair",
+            "headers": {},
+            "selections": [
+                {
+                    "court": {"site_id": site_id, "site_name": f"{site_id}号场"},
+                    "time_slot": {"start_time": "09:00", "end_time": "10:00", "start_timestamp": 100, "end_timestamp": 200, "price": "75", "times": "1"},
+                }
+                for site_id in range(1, 8)
+            ],
+        }
+
+        requests = store.build_submit_requests(params)
+
+        first_sites = [item["site_name"] for item in requests[0]["body"]["venues_site_time"]]
+        self.assertIn("7号场", first_sites)
+
+    def test_pair_mode_rotates_combinations_by_round(self) -> None:
+        store = CaptureStore("request.txt")
+        params = {
+            "date": _tomorrow(),
+            "dates": [_tomorrow()],
+            "request_mode": "pair",
+            "headers": {},
+            "selections": [
+                {
+                    "court": {"site_id": site_id, "site_name": f"{site_id}号场"},
+                    "time_slot": {"start_time": "09:00", "end_time": "10:00", "start_timestamp": 100, "end_timestamp": 200, "price": "75", "times": "1"},
+                }
+                for site_id in range(1, 8)
+            ],
+        }
+
+        first_round = store.build_submit_requests(params, rotation_index=0)
+        second_round = store.build_submit_requests(params, rotation_index=1)
+
+        first_pair = [item["site_name"] for item in first_round[0]["body"]["venues_site_time"]]
+        second_pair = [item["site_name"] for item in second_round[0]["body"]["venues_site_time"]]
+        self.assertNotEqual(first_pair, second_pair)
+        self.assertIn("7号场", first_pair)
+        self.assertIn("7号场", second_pair)
+
+    def test_preview_lists_all_distinct_rotating_pair_requests(self) -> None:
+        app = BookingWebApp("request.txt")
+        params = {
+            "date": _tomorrow(),
+            "dates": [_tomorrow()],
+            "request_mode": "pair",
+            "headers": {},
+            "selections": [
+                {
+                    "court": {"site_id": site_id, "site_name": f"{site_id}号场"},
+                    "time_slot": {"start_time": "09:00", "end_time": "10:00", "start_timestamp": 100, "end_timestamp": 200, "price": "75", "times": "1"},
+                }
+                for site_id in range(1, 8)
+            ],
+        }
+
+        preview = app.preview("client-a", params)
+
+        self.assertEqual(preview["count"], 21)
+        self.assertNotIn("rounds", preview)
+        first_request = preview["requests"][0]["body"]["venues_site_time"]
+        self.assertEqual([slot["site_name"] for slot in first_request], ["1号场", "7号场"])
+        self.assertTrue(all(len(request["body"]["venues_site_time"]) == 2 for request in preview["requests"]))
+
+    def test_default_params_use_new_schedule_window_defaults(self) -> None:
+        app = BookingWebApp("request.txt")
+
+        params = app.default_params()
+
+        self.assertEqual(params["interval_seconds"], 0.2)
+        self.assertEqual(params["qps"], 5)
+        self.assertEqual(params["run_duration_seconds"], 45)
+        self.assertRegex(params["scheduled_start_at"], r"\d{4}-\d{2}-\d{2} 23:59:55")
+
     def test_wx_token_is_hidden_from_public_backend_state(self) -> None:
         app = BookingWebApp("request.txt")
 
@@ -108,7 +248,8 @@ class BookingWebAppTest(unittest.TestCase):
                 "client_id": ["client-a"],
                 "wx_token": ["token-c"],
                 "dates": [_day_after(2)],
-                "interval_seconds": ["0.2"],
+                "qps": ["5"],
+                "run_duration_seconds": ["45"],
                 "max_attempts": ["50"],
                 "request_mode": ["single"],
                 "selection": ["3692729935134809|08:00-09:00"],
@@ -117,10 +258,47 @@ class BookingWebAppTest(unittest.TestCase):
         snapshot = app.admin_snapshot()["tasks"][0]
         self.assertEqual(snapshot["wx_token"], "token-c")
         self.assertEqual(snapshot["params"]["dates"], [_day_after(2)])
+        self.assertEqual(snapshot["params"]["qps"], 5)
         self.assertEqual(snapshot["params"]["interval_seconds"], 0.2)
+        self.assertEqual(snapshot["params"]["run_duration_seconds"], 45)
         self.assertEqual(snapshot["params"]["max_attempts"], 50)
         self.assertEqual(snapshot["params"]["selections"][0]["court"]["site_name"], "4号场")
         self.assertEqual(snapshot["params"]["selections"][0]["time_slot"]["start_time"], "08:00")
+
+    def test_run_loop_stops_when_run_duration_reached(self) -> None:
+        app = BookingWebApp("request.txt")
+        state = app.state_for("client-a")
+        params = app.default_params()
+        params.update(
+            {
+                "schedule_enabled": True,
+                "scheduled_start_at": "2026-07-09 23:59:55",
+                "run_duration_seconds": 45,
+                "qps": 5,
+                "selections": [
+                    {
+                        "court": {"site_id": 1, "site_name": "1号场"},
+                        "time_slot": {
+                            "start_time": "08:00",
+                            "end_time": "09:00",
+                            "start_timestamp": 100,
+                            "end_timestamp": 200,
+                            "price": "75",
+                            "times": "1",
+                        },
+                    }
+                ],
+            }
+        )
+
+        with patch.object(app, "_wait_for_schedule", return_value=True), \
+             patch.object(app, "_send_request", return_value={"success": False}), \
+             patch("badminton_booker.webapp.time.sleep") as sleep, \
+             patch("badminton_booker.webapp.time.time", side_effect=[100.0, 100.0, 145.0]):
+            app._run_loop(state, params)
+
+        sleep.assert_not_called()
+        self.assertTrue(any("已达到执行时长 45秒" in line for line in state.logs))
 
     def test_admin_task_name_uses_date_court_count_and_main_time(self) -> None:
         params = {
@@ -222,7 +400,7 @@ class BookingWebAppTest(unittest.TestCase):
     def test_notify_uses_wechat_bot_webhook(self) -> None:
         captured = {}
 
-        def fake_urlopen(request, timeout=0):
+        def fake_urlopen(request, timeout=0, context=None):
             captured["url"] = request.full_url
             captured["data"] = request.data.decode("utf-8")
             captured["timeout"] = timeout

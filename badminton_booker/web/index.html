@@ -36,8 +36,8 @@
                 <input id="dateInput" type="date" />
                 <span id="dateWeekday" class="date-weekday">未选择</span>
               </div>
-              <label class="mini-field">间隔<input id="intervalInput" type="number" min="0.2" step="0.01" value="0.2" /></label>
-              <label class="mini-field">次数<input id="maxAttemptsInput" type="number" min="0" value="100000" /></label>
+              <label class="mini-field">QPS<input id="qpsInput" type="number" min="0.1" step="0.1" value="5" /></label>
+              <label class="mini-field">请求数<input id="maxAttemptsInput" type="number" min="0" value="100000" /></label>
             </div>
           </div>
           <div class="cell cell-combo">
@@ -45,7 +45,9 @@
             <div class="combo-row">
               <label class="toggle"><input id="scheduleEnabledInput" type="checkbox" /><span class="toggle-track"></span></label>
               <input id="scheduledStartInput" type="datetime-local" step="1" onclick="this.showPicker?.()" />
+              <label class="mini-field">时长<input id="runDurationInput" type="number" min="1" step="1" value="45" /></label>
             </div>
+            <div id="scheduleWindowHint" class="field-hint">默认运行到次日 00:00:40</div>
           </div>
           <div class="cell cell-combo">
             <span class="cell-label">监听下单</span>
@@ -61,9 +63,9 @@
           </div>
           <div class="cell cell-combo no-border">
             <div class="combo-row">
-              <button id="tplMorningBtn" type="button" class="cell-btn">早场 9-10</button>
-              <button id="tplFriEveBtn" type="button" class="cell-btn">周五晚 20-22</button>
-              <button id="tplFriEve2Btn" type="button" class="cell-btn">周五晚 19-20</button>
+              <button id="tplMorning9Btn" type="button" class="cell-btn">早场 9-10</button>
+              <button id="tplMorning10Btn" type="button" class="cell-btn">早场 10-11</button>
+              <button id="tplMorningPairBtn" type="button" class="cell-btn">早场 9-11</button>
             </div>
           </div>
           <div class="cell cell-combo no-border">
@@ -92,6 +94,11 @@
           <button id="clearSelectionBtn" type="button" class="ghost-btn">清空选择</button>
         </div>
         <p class="field-hint" id="fieldHint">普通抢票可直接选择可预约目标；监听模式需要先查询实时状态，只能选择"不可预约"的场地时间。</p>
+        <div class="request-preview" id="requestPreview">
+          <div class="request-preview-title">请求预览</div>
+          <div class="request-preview-summary" id="requestPreviewSummary">正在计算…</div>
+          <div class="request-preview-list" id="requestPreviewList"></div>
+        </div>
         <div id="scheduleGrid" class="schedule-grid"></div>
       </section>
 
