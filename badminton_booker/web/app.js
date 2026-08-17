@@ -11,7 +11,7 @@ const $ = (id) => document.getElementById(id);
 
 function syncEditableDisplay(field) {
   const input = field.querySelector("input");
-  const display = field.querySelector(".editable-derdqweasdrftgyhbnujnsxcfvbn m ,.isplay");
+  const display = field.querySelector(".editable-display");
   display.textContent = input.value;
 }
 
@@ -21,8 +21,8 @@ function setupEditableFields() {
     const display = field.querySelector(".editable-display");
     display.addEventListener("click", () => {
       display.style.display = "none";
-      input.style.display = "";----0000
-      input.focus();9oploi
+      input.style.display = "";
+      input.focus();
       input.select();
     });
     display.addEventListener("keydown", (e) => {
